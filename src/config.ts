@@ -20,6 +20,11 @@ export const config = {
   /** Which DataProvider implementation to use. Add new providers in src/providers/index.ts. */
   provider: str("DATA_PROVIDER", "upstox").toLowerCase(),
 
+  /** Auto-open the dashboard in the default browser at startup. "auto" (the default)
+   *  means on when running as the packaged .exe and off under plain Node; "true"/"false"
+   *  force it either way — set "false" for headless/server runs. */
+  openBrowser: str("OPEN_BROWSER", "auto").toLowerCase(),
+
   // --- Upstox settings, used only when DATA_PROVIDER=upstox ---
   upstoxAccessToken: str("UPSTOX_ACCESS_TOKEN", ""),
   upstoxBaseUrl: str("UPSTOX_BASE_URL", "https://api.upstox.com/v2"),

@@ -82,7 +82,9 @@ tick();
 server.listen(config.port, () => {
   const url = `http://localhost:${config.port}`;
   console.log(`F&O O=L screener listening on ${url} (provider=${provider.name})`);
-  if (isPackaged || process.env.OPEN_BROWSER === "true") {
+  const shouldOpenBrowser =
+    config.openBrowser === "auto" ? isPackaged : config.openBrowser === "true";
+  if (shouldOpenBrowser) {
     console.log("Opening dashboard in your default browser... (close this window to stop the screener)");
     openBrowser(url);
   }

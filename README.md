@@ -95,6 +95,18 @@ Two notes on the output: `postject` prints `warning: The signature seems corrupt
 that's expected for an unsigned binary and harmless. And since the .exe isn't code-signed,
 Windows SmartScreen may warn about an unrecognized publisher on first run.
 
+### Getting the .exe without building it yourself
+
+`.github/workflows/build-windows-exe.yml` builds it on every push and uploads the whole
+`release/` folder as a downloadable workflow artifact (**Actions** tab → the run → the
+`fno-ol-screener-windows` artifact). A second job then runs that exact `.exe` on a real
+`windows-latest` runner against the mock provider and asserts it serves a completed scan
+cycle and its dashboard assets — so a packaging regression fails CI rather than reaching
+you. Pushing a `v*` tag additionally zips the folder and attaches it to a GitHub Release.
+
+Note that `release/` is deliberately gitignored — an 88 MB binary doesn't belong in git,
+so CI artifacts (or a local `npm run package:win`) are the way to get a build.
+
 ## Adding your own broker/data provider
 
 Implement `DataProvider` (see `src/types.ts`) in a new file under `src/providers/`,
@@ -126,6 +138,7 @@ all provider-agnostic.
 | `INSTRUMENT_REFRESH_MS` | `1800000` | How often the F&O instrument master is refreshed |
 | `MARKET_OPEN` / `MARKET_CLOSE` | `09:15` / `15:30` | IST trading window the scanner runs in |
 | `IGNORE_MARKET_HOURS` | `false` | Set `true` to scan outside market hours (demos) |
+| `OPEN_BROWSER` | `auto` | Auto-open the dashboard: `auto` = on for the packaged `.exe`, off under plain Node; `true`/`false` force it |
 | `MAX_RETRIES` | `4` | Retries per batch on rate-limit/transient errors before it's reported as an error for that cycle |
 
 ### Sizing the refresh interval against rate limits
