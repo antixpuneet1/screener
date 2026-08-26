@@ -2,3 +2,8 @@ node_modules/
 dist/
 .env
 *.log
+
+# Packaging output: the bundled app, the downloaded Windows Node.js runtime (~87 MB),
+# the SEA blob, and the assembled release folder are all build artifacts.
+build/
+release/
