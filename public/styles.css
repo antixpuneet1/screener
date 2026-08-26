@@ -170,3 +170,10 @@ tr.new-hit {
 .settings-msg.ok { color: var(--green); }
 .settings-msg.err { color: var(--red); }
 .settings-msg.busy { color: var(--muted); }
+
+.build-id {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--muted);
+  margin-left: 8px;
+}

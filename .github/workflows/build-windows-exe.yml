@@ -31,10 +31,12 @@ jobs:
       - name: Package Windows executable
         run: npm run package:win
 
+      # Artifact name carries the commit so a freshly downloaded build is never
+      # confusable with an older one sitting in the same Downloads folder.
       - name: Upload release folder
         uses: actions/upload-artifact@v4
         with:
-          name: fno-ol-screener-windows
+          name: fno-ol-screener-windows-${{ github.sha }}
           path: release/
           if-no-files-found: error
 
@@ -45,7 +47,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: fno-ol-screener-windows
+          name: fno-ol-screener-windows-${{ github.sha }}
           path: release
 
       # Runs the real executable against the mock provider (no credentials needed) and
@@ -60,7 +62,12 @@ jobs:
           $env:OPEN_BROWSER = "false"
           $env:PORT = "4999"
 
-          $proc = Start-Process -FilePath ".\release\fno-ol-screener.exe" `
+          # The executable name carries the build id, so resolve it rather than hardcoding.
+          $exe = Get-ChildItem -Path release -Filter "fno-ol-screener-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "No fno-ol-screener-*.exe found in the release folder" }
+          Write-Host "Testing $($exe.Name)"
+
+          $proc = Start-Process -FilePath $exe.FullName `
             -PassThru -NoNewWindow `
             -RedirectStandardOutput screener-out.log `
             -RedirectStandardError screener-err.log
@@ -112,7 +119,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: fno-ol-screener-windows
+          name: fno-ol-screener-windows-${{ github.sha }}
           path: release
 
       - name: Zip the release folder

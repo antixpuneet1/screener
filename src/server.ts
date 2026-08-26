@@ -31,6 +31,12 @@ import {
 // handles — esbuild cannot translate import.meta.url for a CommonJS bundle (case 1/2),
 // but that expression is never reached there since isPackaged/__dirname short-circuit it.
 declare const __dirname: string | undefined;
+
+// Replaced at package time by esbuild --define (see scripts/package-win.mjs). Printed at
+// startup and shown in the dashboard so which build is running is never ambiguous.
+declare const __BUILD_ID__: string | undefined;
+export const BUILD_ID = typeof __BUILD_ID__ !== "undefined" ? __BUILD_ID__ : "dev";
+
 const publicDir = isPackaged
   ? path.join(appDir(), "public")
   : path.join(
@@ -136,6 +142,7 @@ app.get("/api/settings", (_req, res) => {
     tokenSource: stored.upstoxAccessToken ? "settings" : eff.upstoxAccessToken ? "env" : "none",
     settingsFile: settingsFileLocation(),
     configError: providerError,
+    buildId: BUILD_ID,
   });
 });
 
@@ -197,7 +204,8 @@ void tick();
 // must not be reachable from other machines on the network.
 server.listen(config.port, "127.0.0.1", () => {
   const url = `http://localhost:${config.port}`;
-  console.log(`F&O O=L screener listening on ${url} (provider=${provider?.name ?? "not configured"})`);
+  console.log(`F&O O=L screener  |  build ${BUILD_ID}  |  settings page enabled`);
+  console.log(`Listening on ${url} (provider=${provider?.name ?? "not configured"})`);
   if (providerError) {
     console.log(`[screener] Open ${url} and use the Settings panel to add your Upstox access token.`);
   }

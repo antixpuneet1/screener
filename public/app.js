@@ -87,6 +87,7 @@ async function loadSettings() {
   elRefresh.value = Math.round(s.refreshIntervalMs / 1000);
   elIgnoreHours.checked = s.ignoreMarketHours;
   elFile.textContent = s.settingsFile;
+  document.getElementById("build-id").textContent = "build " + s.buildId;
   elTokenState.textContent = s.tokenSet
     ? `A token is set (${s.tokenMasked}, from ${s.tokenSource === "env" ? ".env" : "settings"}). Leave blank to keep it.`
     : "No token set yet.";

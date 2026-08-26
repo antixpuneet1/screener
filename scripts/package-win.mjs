@@ -14,12 +14,29 @@ const RELEASE_DIR = path.join(ROOT, "release");
 const NODE_VERSION = process.env.SEA_NODE_VERSION || "v22.23.2";
 const NODE_EXE_URL = `https://nodejs.org/dist/${NODE_VERSION}/win-x64/node.exe`;
 const BASE_EXE_CACHE = path.join(BUILD_DIR, `node-win-x64-${NODE_VERSION}.exe`);
-const OUTPUT_EXE = path.join(RELEASE_DIR, "fno-ol-screener.exe");
 
 function run(cmd, args) {
   console.log(`$ ${cmd} ${args.join(" ")}`);
   execFileSync(cmd, args, { stdio: "inherit", cwd: ROOT });
 }
+
+/** Short commit SHA (or a timestamp outside a git checkout), stamped into both the
+ *  executable's filename and its startup banner. Without this an old download and a new
+ *  one are indistinguishable on disk, which is a genuinely confusing failure mode. */
+function buildId() {
+  if (process.env.BUILD_ID) return process.env.BUILD_ID;
+  try {
+    return execFileSync("git", ["rev-parse", "--short=7", "HEAD"], { cwd: ROOT })
+      .toString()
+      .trim();
+  } catch {
+    return new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
+  }
+}
+
+const BUILD_ID = buildId();
+// Versioned filename so a stale copy can never shadow a fresh one in the same folder.
+const OUTPUT_EXE = path.join(RELEASE_DIR, `fno-ol-screener-${BUILD_ID}.exe`);
 
 async function ensureBaseNodeExe() {
   if (existsSync(BASE_EXE_CACHE)) {
@@ -47,6 +64,7 @@ async function main() {
     "--platform=node",
     "--format=cjs",
     "--target=node18",
+    `--define:__BUILD_ID__=${JSON.stringify(BUILD_ID)}`,
     "--outfile=build/server.cjs",
   ]);
 
