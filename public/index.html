@@ -4,13 +4,62 @@
   <meta charset="utf-8" />
   <title>F&amp;O O=L Screener</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b0f14'/%3E%3Cpath d='M3 11h2v2H3zm4-4h2v6H7zm4-3h2v9h-2z' fill='%233fb950'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <header>
     <h1>F&amp;O Open&nbsp;=&nbsp;Low Screener</h1>
-    <div id="status" class="status">connecting…</div>
+    <div class="header-right">
+      <div id="status" class="status">connecting…</div>
+      <button id="settings-toggle" class="btn" type="button">⚙ Settings</button>
+    </div>
   </header>
+
+  <div id="config-banner" class="banner" hidden></div>
+
+  <section id="settings-panel" class="settings" hidden>
+    <h2>Settings</h2>
+
+    <label class="field">
+      <span>Data source</span>
+      <select id="set-provider">
+        <option value="upstox">Upstox (live)</option>
+        <option value="mock">Mock (simulated, no token needed)</option>
+      </select>
+    </label>
+
+    <label class="field">
+      <span>Upstox access token</span>
+      <input id="set-token" type="password" autocomplete="off" spellcheck="false"
+             placeholder="paste token to set or replace" />
+      <small id="token-state" class="hint"></small>
+    </label>
+
+    <label class="field">
+      <span>Refresh interval (seconds)</span>
+      <input id="set-refresh" type="number" min="5" step="1" />
+      <small class="hint">How often the full F&amp;O universe is rescanned. Lower values use more of your Upstox rate limit.</small>
+    </label>
+
+    <label class="field checkbox">
+      <input id="set-ignore-hours" type="checkbox" />
+      <span>Scan outside market hours (for testing — data will not be live)</span>
+    </label>
+
+    <div class="actions">
+      <button id="btn-test" class="btn" type="button">Test token</button>
+      <button id="btn-save" class="btn primary" type="button">Save</button>
+      <button id="btn-clear" class="btn danger" type="button">Clear token</button>
+    </div>
+
+    <p id="settings-msg" class="settings-msg"></p>
+    <p class="hint">
+      Your token is stored in <code id="settings-file"></code> on this machine, in plain text.
+      Tokens expire daily around 3:30am IST and must be re-entered.
+    </p>
+  </section>
 
   <section class="summary">
     <div class="stat"><span id="stat-hits">0</span><label>O=L hits</label></div>

@@ -36,6 +36,34 @@ providers/ (DataProvider impls) → Scanner (batch quotes, rate limiting, O=L de
 - **`src/marketHours.ts`** — scanning is gated to NSE market hours (IST, Mon–Fri,
   configurable), so the loop is idle outside trading hours instead of scanning stale data.
 
+## Configuring it: the Settings page
+
+Click **⚙ Settings** in the dashboard header. You can set the data source
+(Upstox or mock), paste your Upstox access token, change the refresh interval, and
+toggle market-hours scanning — all without touching a config file.
+
+- **Test token** validates the token against Upstox's `/user/profile` endpoint before
+  you commit to it, so an expired token is obvious immediately.
+- **Save** persists to `settings.json` beside the executable and *rebuilds the data
+  provider in place* — the new token takes effect on the next scan cycle, no restart.
+- Settings entered here **override** `.env`; anything left unset falls through to `.env`
+  and then to the built-in defaults.
+- Missing token is not fatal. The app starts anyway, shows a banner, and waits for you to
+  configure it — otherwise you could never reach the settings page to fix it.
+
+### Security notes
+
+The token is a live credential for your broker account, so:
+
+- `settings.json` is written with `0600` permissions and is gitignored. **It is plain
+  text** — anyone with access to your OS account can read it. (Windows treats the mode
+  as advisory; account-level access is the real boundary.)
+- The server binds to **`127.0.0.1` only**, never `0.0.0.0`, so the dashboard and its
+  settings API are not reachable from other machines.
+- `GET /api/settings` never returns the token — only `tokenSet` and the last 4
+  characters. The token is never written to logs.
+- **Clear token** in the UI removes it from disk.
+
 ## Getting an Upstox access token
 
 1. Create an app at the [Upstox developer console](https://account.upstox.com/developer/apps)
@@ -48,19 +76,20 @@ providers/ (DataProvider impls) → Scanner (batch quotes, rate limiting, O=L de
    `client_secret`, `redirect_uri`, and `grant_type=authorization_code`.
 5. Put the returned `access_token` in `.env` as `UPSTOX_ACCESS_TOKEN`.
 
-**Tokens expire daily (~3:30am IST)**, so this is a once-per-trading-day step. If you want
-it hands-off, script steps 2–5 and have the script rewrite `.env` before market open.
+**Tokens expire daily (~3:30am IST)**, so this is a once-per-trading-day step: open
+Settings and paste the new one. If you want it hands-off, script steps 2–5 and have the
+script write `{"upstoxAccessToken": "..."}` into `settings.json` before market open.
 
 ## Running as a normal Node app
 
 ```bash
 npm install
-cp .env.example .env    # then set UPSTOX_ACCESS_TOKEN
-npm run dev             # http://localhost:4000
+npm run dev             # http://localhost:4000, then configure via ⚙ Settings
 ```
 
-To try it without any credentials, set `DATA_PROVIDER=mock` (and
-`IGNORE_MARKET_HOURS=true` if you're outside 09:15–15:30 IST).
+No `.env` needed — add your token through the Settings page. To try it without any
+credentials, pick the mock data source in Settings and tick "scan outside market hours".
+`.env` is still supported if you prefer it (`cp .env.example .env`).
 
 Production build: `npm run build && npm start`.
 

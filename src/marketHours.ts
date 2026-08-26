@@ -1,4 +1,5 @@
 import { config } from "./config.js";
+import { effectiveConfig } from "./settings.js";
 
 const IST_OFFSET_MIN = 5 * 60 + 30;
 
@@ -14,7 +15,7 @@ function parseHHMM(hhmm: string): number {
 
 /** True on Mon-Fri between MARKET_OPEN and MARKET_CLOSE, IST. NSE holiday calendar is not modeled. */
 export function isMarketOpen(): boolean {
-  if (config.ignoreMarketHours) return true;
+  if (effectiveConfig().ignoreMarketHours) return true;
 
   const ist = istNow();
   const day = ist.getUTCDay(); // istNow() already shifted, so use UTC getters on the shifted value

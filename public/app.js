@@ -19,17 +19,28 @@ function fmtTs(iso) {
 }
 
 function render(msg) {
-  statProvider.textContent = msg.provider;
+  const banner = document.getElementById("config-banner");
+  if (msg.configError) {
+    banner.hidden = false;
+    banner.textContent = `${msg.configError} — open Settings to fix this.`;
+  } else {
+    banner.hidden = true;
+  }
+
+  statProvider.textContent = msg.provider ?? "—";
   statScanned.textContent = fmtNum(msg.scannedContracts);
   statHits.textContent = fmtNum(msg.hits.length);
   statUpdated.textContent = fmtTs(msg.cycleStartedAt);
 
-  statusEl.textContent = msg.marketOpen
-    ? msg.errors.length
-      ? `live — ${msg.errors.length} error(s) last cycle`
-      : "market open — live"
-    : "market closed";
-  statusEl.className = "status " + (msg.errors.length ? "error" : msg.marketOpen ? "open" : "closed");
+  statusEl.textContent = msg.configError
+    ? "not configured"
+    : msg.marketOpen
+      ? msg.errors.length
+        ? `live — ${msg.errors.length} error(s) last cycle`
+        : "market open — live"
+      : "market closed";
+  statusEl.className =
+    "status " + (msg.configError || msg.errors.length ? "error" : msg.marketOpen ? "open" : "closed");
 
   emptyEl.style.display = msg.hits.length === 0 ? "block" : "none";
 
@@ -53,6 +64,83 @@ function render(msg) {
     bodyEl.appendChild(tr);
   }
 }
+
+// --- Settings panel ---------------------------------------------------------------
+
+const panel = document.getElementById("settings-panel");
+const elProvider = document.getElementById("set-provider");
+const elToken = document.getElementById("set-token");
+const elTokenState = document.getElementById("token-state");
+const elRefresh = document.getElementById("set-refresh");
+const elIgnoreHours = document.getElementById("set-ignore-hours");
+const elMsg = document.getElementById("settings-msg");
+const elFile = document.getElementById("settings-file");
+
+function setMsg(text, kind) {
+  elMsg.textContent = text;
+  elMsg.className = "settings-msg" + (kind ? " " + kind : "");
+}
+
+async function loadSettings() {
+  const s = await (await fetch("/api/settings")).json();
+  elProvider.value = s.provider;
+  elRefresh.value = Math.round(s.refreshIntervalMs / 1000);
+  elIgnoreHours.checked = s.ignoreMarketHours;
+  elFile.textContent = s.settingsFile;
+  elTokenState.textContent = s.tokenSet
+    ? `A token is set (${s.tokenMasked}, from ${s.tokenSource === "env" ? ".env" : "settings"}). Leave blank to keep it.`
+    : "No token set yet.";
+}
+
+document.getElementById("settings-toggle").addEventListener("click", async () => {
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    setMsg("", null);
+    await loadSettings();
+  }
+});
+
+document.getElementById("btn-test").addEventListener("click", async () => {
+  setMsg("Testing token against Upstox…", "busy");
+  const res = await fetch("/api/settings/test", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upstoxAccessToken: elToken.value }),
+  });
+  const r = await res.json();
+  setMsg(r.message, r.ok ? "ok" : "err");
+});
+
+document.getElementById("btn-save").addEventListener("click", async () => {
+  setMsg("Saving…", "busy");
+  const res = await fetch("/api/settings", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      provider: elProvider.value,
+      upstoxAccessToken: elToken.value,
+      refreshIntervalMs: Number(elRefresh.value) * 1000,
+      ignoreMarketHours: elIgnoreHours.checked,
+    }),
+  });
+  const r = await res.json();
+  if (!r.ok) {
+    setMsg(r.message || "Save failed.", "err");
+    return;
+  }
+  elToken.value = "";
+  await loadSettings();
+  setMsg(r.configError ? `Saved, but: ${r.configError}` : "Saved and applied.", r.configError ? "err" : "ok");
+});
+
+document.getElementById("btn-clear").addEventListener("click", async () => {
+  if (!confirm("Remove the stored Upstox token?")) return;
+  setMsg("Clearing…", "busy");
+  const r = await (await fetch("/api/settings/clear-token", { method: "POST" })).json();
+  elToken.value = "";
+  await loadSettings();
+  setMsg(r.ok ? "Token cleared." : "Could not clear token.", r.ok ? "ok" : "err");
+});
 
 function connect() {
   const proto = location.protocol === "https:" ? "wss:" : "ws:";

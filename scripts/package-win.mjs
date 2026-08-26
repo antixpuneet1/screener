@@ -100,20 +100,35 @@ const DIST_README = `F&O O=L Screener - Windows build
 =================================
 
 This folder is a complete, self-contained copy of the screener. Keep these
-three items together in the same folder:
+two items together in the same folder:
 
   fno-ol-screener.exe   <- the app
   public/               <- the dashboard's web assets (required)
-  .env                  <- your settings (copy .env.example to .env and edit it)
+
+Settings are entered in the app itself and saved to settings.json here.
 
 Setup
 -----
-1. Copy .env.example to .env in this same folder.
-2. Open .env and set UPSTOX_ACCESS_TOKEN to a token generated via the Upstox
-   OAuth login flow (it expires daily around 3:30am IST, so this needs
-   refreshing each trading day - see the project README for the login-flow
-   steps, or automate it with your own script that rewrites .env).
-3. Double-click fno-ol-screener.exe.
+1. Double-click fno-ol-screener.exe. No config file editing needed.
+2. Your browser opens to the dashboard. Click "Settings" (top right).
+3. Paste your Upstox access token, click "Test token" to confirm it works,
+   then "Save". The screener starts immediately - no restart required.
+
+You do NOT need to create a .env file. It is supported (see .env.example)
+if you prefer setting things that way, but the Settings page is the easy
+path and overrides .env.
+
+Getting an Upstox access token
+-------------------------------
+Tokens come from the Upstox OAuth login flow and EXPIRE DAILY around
+3:30am IST, so expect to paste a fresh one each trading day. See the
+project README for the four-step login flow.
+
+Just want to see it work first?
+--------------------------------
+In Settings, set "Data source" to "Mock (simulated, no token needed)" and
+tick "Scan outside market hours". Save. The dashboard fills with simulated
+contracts so you can confirm everything runs before dealing with tokens.
 
 What happens when you run it
 -----------------------------
@@ -124,11 +139,20 @@ rescans every NSE F&O stock's CE/PE contracts across all strikes/expiries
 for Open = Low; outside market hours it stays idle rather than showing
 stale data.
 
+Where your token is stored
+---------------------------
+In settings.json, next to this executable, in PLAIN TEXT (file permissions
+are restricted to your user account). Anyone with access to your Windows
+account can read it. Use "Clear token" in Settings to remove it. The
+dashboard listens on 127.0.0.1 only, so it is not reachable from other
+machines on your network.
+
 Troubleshooting
 ----------------
-- "FATAL: UpstoxProvider requires UPSTOX_ACCESS_TOKEN..." - your .env is
-  missing or the token wasn't set; the console window stays open so you can
-  read this message, then press any key to close it.
+- Red banner "No Upstox access token configured" - expected on first run;
+  open Settings and add your token.
+- "Upstox rejected this token (401/403)" - the token is wrong or expired
+  (they last less than a day). Generate a fresh one.
 - Nothing shows up in the table - that's expected outside NSE market hours
   (09:15-15:30 IST, Mon-Fri) or before any contract has actually printed
   Open = Low today; check the status bar at the top of the dashboard.

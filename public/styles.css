@@ -96,3 +96,77 @@ tr.new-hit {
   text-align: center;
   padding: 40px 0;
 }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
+.btn.danger { color: var(--red); }
+
+.banner {
+  margin: 12px 24px 0;
+  padding: 10px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--red);
+  background: rgba(248, 81, 73, 0.12);
+  color: var(--red);
+  font-size: 13px;
+}
+
+.settings {
+  margin: 16px 24px 0;
+  padding: 18px 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  max-width: 620px;
+}
+.settings h2 { margin: 0 0 14px; font-size: 15px; }
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.field > span { font-size: 13px; color: var(--muted); }
+.field input[type="password"],
+.field input[type="number"],
+.field select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.field.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.field.checkbox > span { font-size: 13px; color: var(--text); }
+
+.hint { font-size: 12px; color: var(--muted); line-height: 1.5; }
+.hint code { color: var(--text); word-break: break-all; }
+
+.actions { display: flex; gap: 8px; margin: 4px 0 10px; }
+
+.settings-msg { font-size: 13px; margin: 6px 0; min-height: 18px; }
+.settings-msg.ok { color: var(--green); }
+.settings-msg.err { color: var(--red); }
+.settings-msg.busy { color: var(--muted); }

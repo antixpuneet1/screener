@@ -78,8 +78,9 @@ export class UpstoxProvider implements DataProvider {
     };
     if (!this.cfg.accessToken) {
       throw new Error(
-        "UpstoxProvider requires UPSTOX_ACCESS_TOKEN to be set. Generate one via the Upstox " +
-          "OAuth login flow (it expires daily around 3:30am IST) and set it in your .env.",
+        "No Upstox access token configured. Add one in the Settings panel (or set " +
+          "UPSTOX_ACCESS_TOKEN in .env). Tokens come from the Upstox OAuth login flow and " +
+          "expire daily around 3:30am IST.",
       );
     }
     this.quoteRateLimitPerSecond = config.upstoxQuoteRateLimitPerSecond;
@@ -90,6 +91,30 @@ export class UpstoxProvider implements DataProvider {
    *  historical-data job, for more accurate Change in OI than the session-open proxy. */
   seedChangeInOiBaseline(baseline: Map<string, number>): void {
     this.oiBaseline = new Map(baseline);
+  }
+
+  /**
+   * Checks a token against Upstox's profile endpoint, so the settings page can tell a
+   * bad/expired token from a working one before saving. Deliberately status-based rather
+   * than body-shape-based, so it stays correct regardless of the response payload.
+   */
+  static async validateToken(
+    token: string,
+    baseUrl = config.upstoxBaseUrl,
+  ): Promise<{ ok: boolean; message: string }> {
+    if (!token.trim()) return { ok: false, message: "Token is empty." };
+    try {
+      const res = await fetch(`${baseUrl}/user/profile`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      if (res.ok) return { ok: true, message: "Token accepted by Upstox." };
+      if (res.status === 401 || res.status === 403) {
+        return { ok: false, message: "Upstox rejected this token (401/403). It may be expired — tokens expire daily around 3:30am IST." };
+      }
+      return { ok: false, message: `Upstox returned HTTP ${res.status}. Token may still be valid; try again shortly.` };
+    } catch (err) {
+      return { ok: false, message: `Could not reach Upstox: ${(err as Error).message}` };
+    }
   }
 
   private headers(): Record<string, string> {

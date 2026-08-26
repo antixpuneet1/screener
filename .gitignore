@@ -3,6 +3,10 @@ dist/
 .env
 *.log
 
+# Written by the in-app Settings page and holds the Upstox access token in plain text.
+# Must never be committed.
+settings.json
+
 # Packaging output: the bundled app, the downloaded Windows Node.js runtime (~87 MB),
 # the SEA blob, and the assembled release folder are all build artifacts.
 build/
