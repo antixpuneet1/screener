@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>F&amp;O O=L Screener</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>F&amp;O Open&nbsp;=&nbsp;Low Screener</h1>
+    <div id="status" class="status">connecting…</div>
+  </header>
+
+  <section class="summary">
+    <div class="stat"><span id="stat-hits">0</span><label>O=L hits</label></div>
+    <div class="stat"><span id="stat-scanned">0</span><label>contracts scanned</label></div>
+    <div class="stat"><span id="stat-provider">-</span><label>provider</label></div>
+    <div class="stat"><span id="stat-updated">-</span><label>last cycle (IST)</label></div>
+  </section>
+
+  <main>
+    <table id="hits-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Type</th>
+          <th>Strike</th>
+          <th>Expiry</th>
+          <th>Open</th>
+          <th>Low</th>
+          <th>LTP</th>
+          <th>Volume</th>
+          <th>OI</th>
+          <th>Chg in OI</th>
+          <th>Timestamp</th>
+        </tr>
+      </thead>
+      <tbody id="hits-body"></tbody>
+    </table>
+    <p id="empty-state" class="empty-state">No Open = Low contracts detected yet this session.</p>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
