@@ -27,6 +27,29 @@ function render(msg) {
     banner.hidden = true;
   }
 
+  // Surface the actual failure text: the app window has no address bar, so the API
+  // response isn't reachable, and an error count alone can't be diagnosed.
+  const errPanel = document.getElementById("error-panel");
+  const errList = document.getElementById("error-list");
+  if (msg.errors && msg.errors.length > 0) {
+    errPanel.hidden = false;
+    document.getElementById("error-summary").textContent =
+      `${msg.errors.length} batch error(s) last cycle — click for details`;
+    errList.innerHTML = "";
+    for (const e of msg.errors.slice(0, 5)) {
+      const li = document.createElement("li");
+      li.textContent = e;
+      errList.appendChild(li);
+    }
+    if (msg.errors.length > 5) {
+      const li = document.createElement("li");
+      li.textContent = `…and ${msg.errors.length - 5} more (see screener.log)`;
+      errList.appendChild(li);
+    }
+  } else {
+    errPanel.hidden = true;
+  }
+
   statProvider.textContent = msg.provider ?? "—";
   statScanned.textContent = fmtNum(msg.scannedContracts);
   statHits.textContent = fmtNum(msg.hits.length);

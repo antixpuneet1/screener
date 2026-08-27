@@ -126,6 +126,20 @@ tr.new-hit {
   font-size: 13px;
 }
 
+.banner.warn {
+  border-color: #d29922;
+  background: rgba(210, 153, 34, 0.12);
+  color: #d29922;
+}
+.banner.warn summary { cursor: pointer; }
+.banner.warn ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 .settings {
   margin: 16px 24px 0;
   padding: 18px 20px;
