@@ -24,6 +24,9 @@ export interface ScanProgress {
   batchesDone: number;
   batchesTotal: number;
   errors: number;
+  /** Human-readable detail, e.g. "downloading contract list (12.4 MB)". Without it a
+   *  slow instrument download is indistinguishable from a hang. */
+  detail?: string;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -83,6 +86,7 @@ export class Scanner {
       batchesDone: 0,
       batchesTotal: 0,
       errors: 0,
+      detail: "downloading contract list (first run can take a minute)",
     });
     try {
       instruments = await withRetry(() => this.provider.getOptionInstruments(), {

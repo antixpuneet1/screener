@@ -1,4 +1,7 @@
 import { gunzipSync } from "node:zlib";
+import fs from "node:fs";
+import path from "node:path";
+import { appDir } from "../bootstrap.js";
 import type { DataProvider, OptionInstrument, OptionQuote, OptionType } from "../types.js";
 import { config } from "../config.js";
 import { RateLimiter, withRetry } from "../rateLimiter.js";
@@ -19,8 +22,14 @@ class HttpError extends Error {
 /** Per-request ceiling. Without one, a stalled connection leaves a scan cycle running
  *  forever: the app then looks frozen with nothing scanned and no error to show. */
 const REQUEST_TIMEOUT_MS = 30_000;
-/** The instrument master is a multi-megabyte download, so it gets a longer ceiling. */
-const INSTRUMENTS_TIMEOUT_MS = 120_000;
+/** The instrument master is a multi-megabyte download, so it gets a longer ceiling —
+ *  but not so long that a blocked download sits invisible for minutes. */
+const INSTRUMENTS_TIMEOUT_MS = 60_000;
+/** Deliberately fewer than the quote retries: this runs before anything can be shown,
+ *  so failing fast and reporting beats retrying behind a "loading" message. */
+const INSTRUMENTS_MAX_RETRIES = 1;
+/** Parsed contract list cached here so a restart doesn't re-download tens of MB. */
+const INSTRUMENTS_CACHE_FILE = "instruments-cache.json";
 
 interface UpstoxInstrumentRow {
   segment: string;
@@ -201,19 +210,50 @@ export class UpstoxProvider implements DataProvider {
     const isStale = Date.now() - this.instrumentsCachedAt > config.instrumentRefreshMs;
     if (this.instrumentsCache.length > 0 && !isStale) return this.instrumentsCache;
 
+    // A same-day cache on disk makes restarts instant instead of re-downloading tens of
+    // megabytes, and keeps the app usable if the download starts failing mid-session.
+    const cached = this.readDiskCache();
+    if (cached) {
+      console.log(`[upstox] using cached contract list (${cached.length.toLocaleString()} option contracts)`);
+      this.instrumentsCache = cached;
+      this.instrumentsCachedAt = Date.now();
+      return cached;
+    }
+
+    console.log(`[upstox] downloading contract list from ${this.cfg.instrumentsUrl} …`);
+    const startedAt = Date.now();
+
     const res = await withRetry(
       () => fetch(this.cfg.instrumentsUrl, { signal: AbortSignal.timeout(INSTRUMENTS_TIMEOUT_MS) }),
-      { maxRetries: config.maxRetries },
+      { maxRetries: INSTRUMENTS_MAX_RETRIES },
     );
     if (!res.ok) {
       const body = (await res.text().catch(() => "")).slice(0, 200);
       throw new HttpError(
         res.status,
-        `Failed to download the Upstox instrument list (HTTP ${res.status}) from ${this.cfg.instrumentsUrl}. ${body}`.trim(),
+        `Could not download the Upstox contract list (HTTP ${res.status}) from ${this.cfg.instrumentsUrl}.` +
+          (res.status === 403
+            ? " Upstox blocks automated downloads of this file for some accounts."
+            : "") +
+          (body ? ` ${body}` : ""),
       );
     }
+
     const gzipped = Buffer.from(await res.arrayBuffer());
-    const rows = JSON.parse(gunzipSync(gzipped).toString("utf-8")) as UpstoxInstrumentRow[];
+    console.log(
+      `[upstox] downloaded ${(gzipped.length / 1e6).toFixed(1)} MB in ${((Date.now() - startedAt) / 1000).toFixed(1)}s, decompressing …`,
+    );
+
+    let rows: UpstoxInstrumentRow[];
+    try {
+      rows = JSON.parse(gunzipSync(gzipped).toString("utf-8")) as UpstoxInstrumentRow[];
+    } catch (err) {
+      throw new Error(
+        `Downloaded the contract list but could not read it (${(err as Error).message}). ` +
+          `The file at ${this.cfg.instrumentsUrl} may not be the expected gzipped JSON.`,
+      );
+    }
+    console.log(`[upstox] parsed ${rows.length.toLocaleString()} instrument rows`);
 
     const instruments: OptionInstrument[] = [];
     for (const row of rows) {
@@ -233,9 +273,47 @@ export class UpstoxProvider implements DataProvider {
       });
     }
 
+    console.log(
+      `[upstox] contract list ready: ${instruments.length.toLocaleString()} NSE F&O option contracts ` +
+        `(${new Set(instruments.map((i) => i.underlying)).size} underlyings)`,
+    );
+    if (instruments.length === 0) {
+      throw new Error(
+        `The contract list downloaded but contained no NSE F&O options (checked ${rows.length.toLocaleString()} rows). ` +
+          `Upstox may have changed the file's format or segment naming.`,
+      );
+    }
+
     this.instrumentsCache = instruments;
     this.instrumentsCachedAt = Date.now();
+    this.writeDiskCache(instruments);
     return instruments;
+  }
+
+  /** Same-day cached contract list, or null when absent/stale/unreadable. */
+  private readDiskCache(): OptionInstrument[] | null {
+    try {
+      const raw = fs.readFileSync(path.join(appDir(), INSTRUMENTS_CACHE_FILE), "utf-8");
+      const parsed = JSON.parse(raw) as { savedOn: string; instruments: OptionInstrument[] };
+      // Contracts expire and new strikes list daily, so only same-session cache is valid.
+      if (parsed.savedOn !== currentSessionDate()) return null;
+      return Array.isArray(parsed.instruments) && parsed.instruments.length > 0
+        ? parsed.instruments
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeDiskCache(instruments: OptionInstrument[]): void {
+    try {
+      fs.writeFileSync(
+        path.join(appDir(), INSTRUMENTS_CACHE_FILE),
+        JSON.stringify({ savedOn: currentSessionDate(), instruments }),
+      );
+    } catch {
+      // A read-only folder just means no caching; not worth failing the scan over.
+    }
   }
 
   async getQuotes(instrumentTokens: string[]): Promise<Map<string, OptionQuote>> {

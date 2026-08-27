@@ -58,7 +58,7 @@ function render(msg) {
   const p = msg.progress;
   if (p && p.phase === "loading-instruments") {
     statScanned.textContent = "…";
-    statUpdated.textContent = "loading contract list";
+    statUpdated.textContent = p.detail || "loading contract list";
   } else if (p && p.phase === "scanning") {
     statScanned.textContent = `${fmtNum(p.quotedContracts)} / ${fmtNum(p.totalContracts)}`;
     statUpdated.textContent = `scanning — batch ${fmtNum(p.batchesDone)} of ${fmtNum(p.batchesTotal)}`;

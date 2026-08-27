@@ -7,6 +7,9 @@ dist/
 # Must never be committed.
 settings.json
 
+# Same-day cache of the downloaded Upstox contract list.
+instruments-cache.json
+
 # Packaging output: the bundled app, the downloaded Windows Node.js runtime (~87 MB),
 # the SEA blob, and the assembled release folder are all build artifacts.
 build/
