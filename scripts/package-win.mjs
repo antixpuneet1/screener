@@ -5,8 +5,41 @@
 // with postject. No prebuilt-binary hosting service is involved (avoids relying
 // on third-party GitHub release infrastructure for the Node runtime itself).
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, copyFileSync, cpSync, writeFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  copyFileSync,
+  cpSync,
+  writeFileSync,
+  readFileSync,
+  statSync,
+} from "node:fs";
 import path from "node:path";
+
+/**
+ * Flips a PE executable's subsystem from CONSOLE (3) to GUI (2).
+ *
+ * node.exe is a console-subsystem binary, so Windows opens a black console window
+ * alongside it. For an app that presents its own window that console is just noise, so
+ * we patch the two-byte Subsystem field in the PE optional header. stdout/stderr then go
+ * nowhere, which is why the app also mirrors its output to screener.log.
+ */
+function setGuiSubsystem(exePath) {
+  const buf = readFileSync(exePath);
+  // e_lfanew at 0x3C points to the PE signature; the COFF header follows it (20 bytes),
+  // then the optional header, whose Subsystem field sits at offset 68.
+  const peOffset = buf.readUInt32LE(0x3c);
+  if (buf.toString("ascii", peOffset, peOffset + 4) !== "PE\0\0") {
+    throw new Error("Not a valid PE executable - cannot set GUI subsystem");
+  }
+  const subsystemOffset = peOffset + 4 + 20 + 68;
+  const current = buf.readUInt16LE(subsystemOffset);
+  if (current === 2) return "already GUI";
+  if (current !== 3) throw new Error(`Unexpected PE subsystem ${current}; refusing to patch`);
+  buf.writeUInt16LE(2, subsystemOffset);
+  writeFileSync(exePath, buf);
+  return "CONSOLE -> GUI";
+}
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const BUILD_DIR = path.join(ROOT, "build");
@@ -103,6 +136,9 @@ async function main() {
     "--overwrite",
   ]);
 
+  console.log("\n== Making it a windowed app (no console) ==");
+  console.log(`Subsystem: ${setGuiSubsystem(OUTPUT_EXE)}`);
+
   console.log("\n== Assembling the release folder ==");
   cpSync(path.join(ROOT, "public"), path.join(RELEASE_DIR, "public"), { recursive: true });
   copyFileSync(path.join(ROOT, ".env.example"), path.join(RELEASE_DIR, ".env.example"));
@@ -150,12 +186,27 @@ contracts so you can confirm everything runs before dealing with tokens.
 
 What happens when you run it
 -----------------------------
-A console window opens (this is normal - it shows live log output) and your
-default browser opens automatically to the live dashboard. Closing the
-console window stops the screener. During market hours it continuously
-rescans every NSE F&O stock's CE/PE contracts across all strikes/expiries
-for Open = Low; outside market hours it stays idle rather than showing
-stale data.
+The app opens in its own window - no console window, no browser tabs or
+address bar, its own taskbar icon. Close the window to quit.
+
+Under the hood the app renders its interface using the Edge (or Chrome)
+engine already on your PC, which is why it looks like a web page inside
+its own window. Nothing is served over the internet: it listens only on
+127.0.0.1, so nothing on your network can reach it.
+
+During market hours it continuously rescans every NSE F&O stock's CE/PE
+contracts across all strikes/expiries for Open = Low; outside market hours
+it stays idle rather than showing stale data.
+
+IMPORTANT - NSE market hours are 09:15 to 15:30 IST, Monday to Friday.
+Outside that window the table is EMPTY and the badge says "market closed".
+That is correct behaviour, not a fault: showing rows then would mean
+showing you the previous session's stale data. To watch it work at any
+time, open Settings, switch Data source to "Mock" and tick "Scan outside
+market hours".
+
+Since there is no console window, all log output goes to screener.log in
+this folder. Check it first if something seems wrong.
 
 Where your token is stored
 ---------------------------
@@ -167,6 +218,9 @@ machines on your network.
 
 Troubleshooting
 ----------------
+- The table is empty and it says "market closed" - expected outside
+  09:15-15:30 IST Mon-Fri. See the note above.
+- Nothing appears to happen at all - check screener.log in this folder.
 - Red banner "No Upstox access token configured" - expected on first run;
   open Settings and add your token.
 - "Upstox rejected this token (401/403)" - the token is wrong or expired

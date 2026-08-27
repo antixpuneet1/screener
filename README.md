@@ -109,9 +109,23 @@ release/
   README-DIST.txt        end-user instructions
 ```
 
-Zip and ship the whole folder. The end user copies `.env.example` to `.env`, sets their
-token, and double-clicks the `.exe` — a console window shows live logs and the dashboard
-opens in their default browser automatically. Closing the console window stops it.
+Zip and ship the whole folder. The end user double-clicks the `.exe` and gets a real
+app window — no console window, no browser chrome, its own taskbar entry — then adds
+their token via the in-app Settings page.
+
+Three things make it behave like a desktop app rather than a web page:
+
+- The packaged binary's PE subsystem is flipped from CONSOLE to GUI, so Windows opens
+  no console window (`setGuiSubsystem` in the packaging script).
+- The UI is rendered by the Edge/Chrome engine already installed on the machine, in
+  `--app` mode with its own `--user-data-dir` — a standalone frameless window, separate
+  from the user's normal browsing session.
+- Since there is no console, all output is mirrored to `screener.log` beside the
+  executable, and a busy port falls forward to the next free one rather than exiting
+  silently.
+
+It is still a local web app under the window — that's the rendering strategy, not a
+hosted service. It binds to `127.0.0.1` only.
 
 How the build works (`scripts/package-win.mjs`): esbuild bundles the app to a single
 CommonJS file, the script downloads the official Windows `node.exe` from nodejs.org, and

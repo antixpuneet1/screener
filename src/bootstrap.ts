@@ -31,8 +31,105 @@ export function loadEnv(): void {
   dotenv.config({ path: fs.existsSync(envPath) ? envPath : undefined });
 }
 
-/** Opens the default browser at `url`. Best-effort — failures are logged, not thrown. */
-export function openBrowser(url: string): void {
+/**
+ * Mirrors console output into screener.log beside the executable.
+ *
+ * The packaged app runs as a GUI-subsystem binary so Windows shows no console window
+ * (see scripts/package-win.mjs) — which means stdout/stderr have nowhere to go. This
+ * keeps a diagnostic trail for when something goes wrong and there is no console to
+ * read it from. Truncated at startup so the file can't grow without bound.
+ */
+export function startFileLogging(): string | null {
+  if (!isPackaged) return null;
+  const logPath = path.join(appDir(), "screener.log");
+  let stream: fs.WriteStream;
+  try {
+    stream = fs.createWriteStream(logPath, { flags: "w" });
+  } catch {
+    return null; // read-only folder: carry on without a log rather than failing to start
+  }
+
+  for (const level of ["log", "error", "warn"] as const) {
+    const original = console[level].bind(console);
+    console[level] = (...args: unknown[]) => {
+      original(...args);
+      try {
+        stream.write(`${new Date().toISOString()} ${args.map(String).join(" ")}\n`);
+      } catch {
+        // never let logging break the app
+      }
+    };
+  }
+  return logPath;
+}
+
+/** Standard install locations for Chromium-based browsers on Windows. Any of these can
+ *  host an "app window": a standalone window with no address bar, no tabs and its own
+ *  taskbar entry, which is what makes this feel like a desktop app rather than a webpage. */
+function findAppWindowHost(): string | null {
+  if (process.platform !== "win32") {
+    for (const p of ["/usr/bin/google-chrome", "/usr/bin/chromium", "/opt/pw-browsers/chromium"]) {
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
+  }
+
+  const programFiles = process.env["ProgramFiles"] ?? "C:\\Program Files";
+  const programFilesX86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+  const localAppData = process.env["LOCALAPPDATA"] ?? "";
+
+  const candidates = [
+    // Edge ships with Windows 10/11, so in practice this first entry almost always hits.
+    path.join(programFilesX86, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path.join(programFiles, "Microsoft", "Edge", "Application", "msedge.exe"),
+    path.join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    path.join(programFilesX86, "Google", "Chrome", "Application", "chrome.exe"),
+    localAppData ? path.join(localAppData, "Google", "Chrome", "Application", "chrome.exe") : "",
+  ].filter(Boolean);
+
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+
+/**
+ * Opens the dashboard as a desktop app window.
+ *
+ * Chromium's --app mode renders the page in its own frameless window with no address
+ * bar, tabs or bookmarks, and a separate --user-data-dir keeps it out of the user's
+ * normal browsing session so it behaves like an independent application. Falls back to
+ * the default browser only when no Chromium-based browser can be found.
+ */
+export function openAppWindow(url: string): void {
+  const host = findAppWindowHost();
+
+  if (host) {
+    const profileDir = path.join(appDir(), ".app-window");
+    const child = spawn(
+      host,
+      [
+        `--app=${url}`,
+        `--user-data-dir=${profileDir}`,
+        "--window-size=1440,900",
+        "--no-first-run",
+        "--no-default-browser-check",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    child.on("error", (err) => {
+      console.error(`[screener] Could not open app window (${err.message}); falling back.`);
+      openInDefaultBrowser(url);
+    });
+    child.unref();
+    return;
+  }
+
+  console.error("[screener] No Chromium-based browser found for an app window; using default browser.");
+  openInDefaultBrowser(url);
+}
+
+function openInDefaultBrowser(url: string): void {
   const cmd =
     process.platform === "win32"
       ? { file: "cmd", args: ["/c", "start", "", url] }
@@ -41,10 +138,10 @@ export function openBrowser(url: string): void {
         : { file: "xdg-open", args: [url] };
 
   const child = spawn(cmd.file, cmd.args, { detached: true, stdio: "ignore" });
-  // A missing browser-opener binary surfaces as an async 'error' event, not a throw;
-  // without this listener Node treats it as an unhandled 'error' and kills the process.
+  // A missing opener binary surfaces as an async 'error' event, not a throw; without this
+  // listener Node treats it as an unhandled 'error' and kills the process.
   child.on("error", (err) => {
-    console.error(`[screener] Could not auto-open browser (open ${url} manually): ${err.message}`);
+    console.error(`[screener] Could not open a window (open ${url} manually): ${err.message}`);
   });
   child.unref();
 }

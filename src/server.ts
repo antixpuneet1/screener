@@ -8,7 +8,7 @@ import { UpstoxProvider } from "./providers/UpstoxProvider.js";
 import { Scanner } from "./screener/scanner.js";
 import { WsHub } from "./ws/hub.js";
 import { isMarketOpen } from "./marketHours.js";
-import { appDir, isPackaged, openBrowser } from "./bootstrap.js";
+import { appDir, isPackaged, openAppWindow, startFileLogging } from "./bootstrap.js";
 import {
   clearToken,
   effectiveConfig,
@@ -200,19 +200,45 @@ buildProvider();
 restartTicker();
 void tick();
 
-// Bound to loopback deliberately: the dashboard accepts an Upstox access token, so it
-// must not be reachable from other machines on the network.
-server.listen(config.port, "127.0.0.1", () => {
-  const url = `http://localhost:${config.port}`;
-  console.log(`F&O O=L screener  |  build ${BUILD_ID}  |  settings page enabled`);
-  console.log(`Listening on ${url} (provider=${provider?.name ?? "not configured"})`);
-  if (providerError) {
-    console.log(`[screener] Open ${url} and use the Settings panel to add your Upstox access token.`);
-  }
-  const shouldOpenBrowser =
-    config.openBrowser === "auto" ? isPackaged : config.openBrowser === "true";
-  if (shouldOpenBrowser) {
-    console.log("Opening dashboard in your default browser... (close this window to stop the screener)");
-    openBrowser(url);
-  }
-});
+const logPath = startFileLogging();
+
+/**
+ * Listens on the first free port at or after `config.port`.
+ *
+ * The packaged app has no console window, so a hard exit on EADDRINUSE (a stale copy
+ * still running, or anything else on 4000) would look like the app silently doing
+ * nothing. Stepping to the next port keeps it launchable instead.
+ */
+function listenOnFreePort(startPort: number, attemptsLeft = 10): void {
+  // Bound to loopback deliberately: the dashboard accepts an Upstox access token, so it
+  // must not be reachable from other machines on the network.
+  server.listen(startPort, "127.0.0.1");
+
+  server.once("error", (err: NodeJS.ErrnoException) => {
+    if (err.code === "EADDRINUSE" && attemptsLeft > 0) {
+      console.log(`[screener] Port ${startPort} is busy, trying ${startPort + 1}...`);
+      listenOnFreePort(startPort + 1, attemptsLeft - 1);
+      return;
+    }
+    console.error(`[screener] Could not start the server: ${err.message}`);
+    process.exit(1);
+  });
+
+  server.once("listening", () => {
+    const port = (server.address() as { port: number }).port;
+    const url = `http://localhost:${port}`;
+    console.log(`F&O O=L screener  |  build ${BUILD_ID}`);
+    console.log(`Listening on ${url} (provider=${provider?.name ?? "not configured"})`);
+    if (logPath) console.log(`Log file: ${logPath}`);
+    if (providerError) {
+      console.log("[screener] No data source configured yet — use the Settings button in the app window.");
+    }
+    const shouldOpen = config.openBrowser === "auto" ? isPackaged : config.openBrowser === "true";
+    if (shouldOpen) {
+      console.log("Opening the app window...");
+      openAppWindow(url);
+    }
+  });
+}
+
+listenOnFreePort(config.port);
