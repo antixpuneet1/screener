@@ -15,6 +15,17 @@ export interface ScanCycleResult {
   marketOpen: boolean;
 }
 
+/** Emitted as a cycle runs. A full-universe scan takes minutes at real F&O size, so
+ *  without this the app looks frozen until the first cycle finally lands. */
+export interface ScanProgress {
+  phase: "loading-instruments" | "scanning" | "idle";
+  totalContracts: number;
+  quotedContracts: number;
+  batchesDone: number;
+  batchesTotal: number;
+  errors: number;
+}
+
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
@@ -32,13 +43,26 @@ export class Scanner {
   private instrumentsByToken = new Map<string, OptionInstrument>();
 
   constructor(private readonly provider: DataProvider) {
-    this.rateLimiter = new RateLimiter(provider.quoteRateLimitPerSecond);
+    // Honour every window the provider declares, so long-window caps throttle the scan
+    // instead of letting it run headlong into 429s.
+    this.rateLimiter = new RateLimiter(
+      provider.quoteRateWindows && provider.quoteRateWindows.length > 0
+        ? [...provider.quoteRateWindows]
+        : provider.quoteRateLimitPerSecond,
+    );
   }
 
-  async runCycle(): Promise<ScanCycleResult> {
+  async runCycle(onProgress?: (p: ScanProgress) => void): Promise<ScanCycleResult> {
     const cycleStart = Date.now();
     const marketOpen = isMarketOpen();
     const errors: string[] = [];
+    const report = (p: ScanProgress) => {
+      try {
+        onProgress?.(p);
+      } catch {
+        // progress reporting must never break a scan
+      }
+    };
 
     if (!marketOpen) {
       return {
@@ -52,6 +76,14 @@ export class Scanner {
     }
 
     let instruments: OptionInstrument[];
+    report({
+      phase: "loading-instruments",
+      totalContracts: 0,
+      quotedContracts: 0,
+      batchesDone: 0,
+      batchesTotal: 0,
+      errors: 0,
+    });
     try {
       instruments = await withRetry(() => this.provider.getOptionInstruments(), {
         maxRetries: config.maxRetries,
@@ -74,6 +106,7 @@ export class Scanner {
     const activeKeys = new Set<string>();
     const quotesByToken = new Map<string, OptionQuote>();
 
+    let batchesDone = 0;
     for (const batch of batches) {
       await this.rateLimiter.acquire();
       try {
@@ -87,6 +120,15 @@ export class Scanner {
           `Quote batch failed (${batch.length} contracts, e.g. ${batch[0]?.tradingSymbol}): ${(err as Error).message}`,
         );
       }
+      batchesDone++;
+      report({
+        phase: "scanning",
+        totalContracts: instruments.length,
+        quotedContracts: quotesByToken.size,
+        batchesDone,
+        batchesTotal: batches.length,
+        errors: errors.length,
+      });
     }
 
     for (const [token, quote] of quotesByToken) {

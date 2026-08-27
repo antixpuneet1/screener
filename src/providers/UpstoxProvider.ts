@@ -16,6 +16,12 @@ class HttpError extends Error {
   }
 }
 
+/** Per-request ceiling. Without one, a stalled connection leaves a scan cycle running
+ *  forever: the app then looks frozen with nothing scanned and no error to show. */
+const REQUEST_TIMEOUT_MS = 30_000;
+/** The instrument master is a multi-megabyte download, so it gets a longer ceiling. */
+const INSTRUMENTS_TIMEOUT_MS = 120_000;
+
 interface UpstoxInstrumentRow {
   segment: string;
   instrument_key: string;
@@ -28,14 +34,26 @@ interface UpstoxInstrumentRow {
   name?: string;
 }
 
+/** Every field is optional/nullable: Upstox returns sparse rows for contracts that have
+ *  not traded, and the whole universe is scanned including illiquid strikes. */
 interface UpstoxQuoteRow {
-  instrument_token: string;
-  timestamp?: number | string;
-  last_trade_time?: number | string;
-  last_price: number;
-  volume: number;
-  oi: number;
-  ohlc: { open: number; high: number; low: number; close: number };
+  instrument_token?: string;
+  timestamp?: number | string | null;
+  last_trade_time?: number | string | null;
+  last_price?: number | null;
+  volume?: number | null;
+  oi?: number | null;
+  ohlc?: {
+    open?: number | null;
+    high?: number | null;
+    low?: number | null;
+    close?: number | null;
+  } | null;
+}
+
+/** Finite number, or null for anything missing/null/non-numeric. */
+function num(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 /**
@@ -55,6 +73,18 @@ export class UpstoxProvider implements DataProvider {
   readonly name = "upstox";
   readonly maxQuoteBatchSize = 500;
   readonly quoteRateLimitPerSecond: number;
+
+  /**
+   * Upstox's documented caps. The 1000/30min ceiling is the binding one for a
+   * full-universe scan: it works out to ~33 requests/minute sustained, so a universe of
+   * N contracts takes roughly (N / 500 / 33) minutes per complete sweep. Set slightly
+   * under each published figure to leave headroom for retries and clock skew.
+   */
+  readonly quoteRateWindows = [
+    { limit: 20, windowMs: 1_000 },
+    { limit: 240, windowMs: 60_000 },
+    { limit: 950, windowMs: 30 * 60_000 },
+  ] as const;
 
   private readonly cfg: UpstoxConfig;
   private readonly rateLimiter: RateLimiter;
@@ -114,20 +144,34 @@ export class UpstoxProvider implements DataProvider {
     try {
       const res = await fetch(probe, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
       if (res.ok) return { ok: true, message: "Token works — Upstox market data is reachable." };
+
+      const body = (await res.text().catch(() => "")).slice(0, 300);
+
+      // A 401/403 does not always come from Upstox: corporate proxies, VPNs and egress
+      // filters return the same codes. Quoting the response body lets the user tell a
+      // rejected token from a blocked network instead of chasing the wrong problem.
       if (res.status === 401 || res.status === 403) {
+        const looksLikeNetworkBlock = /allowlist|proxy|blocked|forbidden by|firewall|gateway/i.test(body);
+        if (looksLikeNetworkBlock) {
+          return {
+            ok: false,
+            message: `Blocked before reaching Upstox (HTTP ${res.status}): ${body} — this looks like a network/proxy restriction, not a bad token.`,
+          };
+        }
         return {
           ok: false,
           message:
-            "Upstox rejected this token (401/403). Check you pasted an access token or Analytics Token — " +
-            "not your API key/secret, which are not tokens. A daily OAuth access token expires at ~3:30am IST; " +
-            "an Analytics Token lasts a year.",
+            `Upstox rejected this token (HTTP ${res.status}). Check you pasted an access token or Analytics Token — ` +
+            `not your API key/secret, which are not tokens. A daily OAuth access token expires at ~3:30am IST; ` +
+            `an Analytics Token lasts a year.${body ? ` Response: ${body}` : ""}`,
         };
       }
       return {
         ok: false,
-        message: `Upstox returned HTTP ${res.status}. The token may still be valid; try again shortly.`,
+        message: `HTTP ${res.status} from ${baseUrl}. ${body}`.trim(),
       };
     } catch (err) {
       return { ok: false, message: `Could not reach Upstox: ${(err as Error).message}` };
@@ -142,7 +186,10 @@ export class UpstoxProvider implements DataProvider {
   }
 
   private async request(path: string): Promise<Response> {
-    const res = await fetch(`${this.cfg.baseUrl}${path}`, { headers: this.headers() });
+    const res = await fetch(`${this.cfg.baseUrl}${path}`, {
+      headers: this.headers(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new HttpError(res.status, `Upstox API ${path} failed: ${res.status} ${body}`);
@@ -154,11 +201,16 @@ export class UpstoxProvider implements DataProvider {
     const isStale = Date.now() - this.instrumentsCachedAt > config.instrumentRefreshMs;
     if (this.instrumentsCache.length > 0 && !isStale) return this.instrumentsCache;
 
-    const res = await withRetry(() => fetch(this.cfg.instrumentsUrl), {
-      maxRetries: config.maxRetries,
-    });
+    const res = await withRetry(
+      () => fetch(this.cfg.instrumentsUrl, { signal: AbortSignal.timeout(INSTRUMENTS_TIMEOUT_MS) }),
+      { maxRetries: config.maxRetries },
+    );
     if (!res.ok) {
-      throw new HttpError(res.status, `Failed to download Upstox instrument master: ${res.status}`);
+      const body = (await res.text().catch(() => "")).slice(0, 200);
+      throw new HttpError(
+        res.status,
+        `Failed to download the Upstox instrument list (HTTP ${res.status}) from ${this.cfg.instrumentsUrl}. ${body}`.trim(),
+      );
     }
     const gzipped = Buffer.from(await res.arrayBuffer());
     const rows = JSON.parse(gunzipSync(gzipped).toString("utf-8")) as UpstoxInstrumentRow[];
@@ -204,29 +256,45 @@ export class UpstoxProvider implements DataProvider {
     const payload = (await res.json()) as { data: Record<string, UpstoxQuoteRow> };
 
     const out = new Map<string, OptionQuote>();
-    for (const q of Object.values(payload.data)) {
-      const token = q.instrument_token;
-      if (!this.oiBaseline.has(token)) this.oiBaseline.set(token, q.oi);
-      const baseline = this.oiBaseline.get(token) ?? q.oi;
+    for (const [key, q] of Object.entries(payload.data ?? {})) {
+      // Upstox omits or nulls fields for contracts that have not traded today, which is
+      // the norm across the far-OTM strikes in the full F&O universe. Reading through a
+      // null ohlc used to throw and take the whole 500-contract batch down with it, so
+      // every field is read defensively and unusable rows are skipped instead.
+      if (!q) continue;
+
+      // The response is keyed by a symbol form; instrument_token is the id we requested.
+      const token = q.instrument_token ?? key;
+      const ohlc = q.ohlc ?? null;
+      const open = num(ohlc?.open);
+      const low = num(ohlc?.low);
+
+      // No open/low means the contract has not traded this session: it cannot satisfy
+      // Open = Low, so there is nothing to report and nothing to warn about.
+      if (open === null || low === null) continue;
+
+      const oi = num(q.oi) ?? 0;
+      if (!this.oiBaseline.has(token)) this.oiBaseline.set(token, oi);
+      const baseline = this.oiBaseline.get(token) ?? oi;
 
       out.set(token, {
         instrumentToken: token,
-        open: q.ohlc.open,
-        high: q.ohlc.high,
-        low: q.ohlc.low,
-        close: q.ohlc.close,
-        ltp: q.last_price,
-        volume: q.volume,
-        oi: q.oi,
-        changeInOi: q.oi - baseline,
+        open,
+        high: num(ohlc?.high) ?? open,
+        low,
+        close: num(ohlc?.close) ?? open,
+        ltp: num(q.last_price) ?? open,
+        volume: num(q.volume) ?? 0,
+        oi,
+        changeInOi: oi - baseline,
         timestamp: this.parseTimestamp(q.timestamp ?? q.last_trade_time),
       });
     }
     return out;
   }
 
-  private parseTimestamp(raw: number | string | undefined): Date {
-    if (raw === undefined) return new Date();
+  private parseTimestamp(raw: number | string | null | undefined): Date {
+    if (raw === undefined || raw === null) return new Date();
     if (typeof raw === "number") return new Date(raw);
     const asNumber = Number(raw);
     return Number.isFinite(asNumber) ? new Date(asNumber) : new Date(raw);

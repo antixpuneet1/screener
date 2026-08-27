@@ -77,4 +77,12 @@ export interface DataProvider {
 
   /** Requests per second this provider's API allows for quote calls. */
   readonly quoteRateLimitPerSecond: number;
+
+  /**
+   * Every rolling limit the provider enforces, not just the per-second one. Real broker
+   * APIs cap longer windows too (Upstox: 25/sec, 250/min, 1000/30min), and on a
+   * full-universe scan those longer windows are what actually bind. Optional: providers
+   * that only have a per-second cap can omit it.
+   */
+  readonly quoteRateWindows?: ReadonlyArray<{ limit: number; windowMs: number }>;
 }

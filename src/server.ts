@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { config } from "./config.js";
 import { createDataProvider, type DataProvider } from "./providers/index.js";
 import { UpstoxProvider } from "./providers/UpstoxProvider.js";
-import { Scanner } from "./screener/scanner.js";
+import { Scanner, type ScanProgress } from "./screener/scanner.js";
 import { WsHub } from "./ws/hub.js";
 import { isMarketOpen } from "./marketHours.js";
 import { appDir, isPackaged, openAppWindow, startFileLogging } from "./bootstrap.js";
@@ -78,6 +78,8 @@ function buildProvider(): void {
   }
 }
 
+let progress: ScanProgress | null = null;
+
 function currentStatePayload() {
   return {
     type: "screener-update" as const,
@@ -90,6 +92,11 @@ function currentStatePayload() {
     cycleStartedAt: lastResult?.cycleStartedAt ?? null,
     cycleDurationMs: lastResult?.cycleDurationMs ?? 0,
     errors: lastResult?.errors ?? [],
+    /** Null once a cycle has completed; non-null while one is in flight. */
+    progress,
+    /** False until the first cycle lands, so the UI can say "still scanning" rather
+     *  than rendering an empty table as though the scan found nothing. */
+    hasCompletedCycle: lastResult !== null,
   };
 }
 
@@ -97,7 +104,17 @@ async function tick(): Promise<void> {
   if (!scanner || cycleInFlight) return; // no provider yet, or a cycle is still running
   cycleInFlight = true;
   try {
-    const result = await scanner.runCycle();
+    // Throttled so a 200-batch scan doesn't flood the socket with updates.
+    let lastPush = 0;
+    const result = await scanner.runCycle((p) => {
+      progress = p;
+      const now = Date.now();
+      if (now - lastPush > 1000) {
+        lastPush = now;
+        hub.broadcast(currentStatePayload());
+      }
+    });
+    progress = null;
     lastResult = result;
     hub.broadcast(currentStatePayload());
     for (const e of result.errors) console.error("[screener]", e);
@@ -107,6 +124,7 @@ async function tick(): Promise<void> {
   } catch (err) {
     console.error("[screener] cycle crashed:", err);
   } finally {
+    progress = null;
     cycleInFlight = false;
   }
 }

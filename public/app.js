@@ -51,9 +51,21 @@ function render(msg) {
   }
 
   statProvider.textContent = msg.provider ?? "—";
-  statScanned.textContent = fmtNum(msg.scannedContracts);
   statHits.textContent = fmtNum(msg.hits.length);
-  statUpdated.textContent = fmtTs(msg.cycleStartedAt);
+
+  // While a cycle is in flight show live progress; a full F&O scan takes minutes, and
+  // rendering zeros with a 1970 timestamp made a working app look broken.
+  const p = msg.progress;
+  if (p && p.phase === "loading-instruments") {
+    statScanned.textContent = "…";
+    statUpdated.textContent = "loading contract list";
+  } else if (p && p.phase === "scanning") {
+    statScanned.textContent = `${fmtNum(p.quotedContracts)} / ${fmtNum(p.totalContracts)}`;
+    statUpdated.textContent = `scanning — batch ${fmtNum(p.batchesDone)} of ${fmtNum(p.batchesTotal)}`;
+  } else {
+    statScanned.textContent = fmtNum(msg.scannedContracts);
+    statUpdated.textContent = msg.cycleStartedAt ? fmtTs(msg.cycleStartedAt) : "no scan completed yet";
+  }
 
   statusEl.textContent = msg.configError
     ? "not configured"
@@ -66,6 +78,15 @@ function render(msg) {
     "status " + (msg.configError || msg.errors.length ? "error" : msg.marketOpen ? "open" : "closed");
 
   emptyEl.style.display = msg.hits.length === 0 ? "block" : "none";
+  emptyEl.textContent = msg.configError
+    ? "Not configured yet — open Settings to add your Upstox token."
+    : msg.progress
+      ? "Scanning… results appear as contracts are quoted."
+      : !msg.hasCompletedCycle
+        ? "Waiting for the first scan to finish."
+        : !msg.marketOpen
+          ? "Market is closed (NSE trades 09:15–15:30 IST, Mon–Fri). Live data resumes at the next open."
+          : "No Open = Low contracts detected yet this session.";
 
   bodyEl.innerHTML = "";
   for (const hit of msg.hits) {
