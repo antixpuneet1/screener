@@ -31,10 +31,14 @@
     </label>
 
     <label class="field">
-      <span>Upstox access token</span>
+      <span>Upstox token</span>
       <input id="set-token" type="password" autocomplete="off" spellcheck="false"
              placeholder="paste token to set or replace" />
       <small id="token-state" class="hint"></small>
+      <small class="hint">
+        Use an <strong>Analytics Token</strong> (Upstox Developer Apps page → read-only, valid 1 year)
+        or a daily OAuth access token. Your <em>API key/secret</em> are not tokens and will be rejected.
+      </small>
     </label>
 
     <label class="field">
@@ -57,7 +61,8 @@
     <p id="settings-msg" class="settings-msg"></p>
     <p class="hint">
       Your token is stored in <code id="settings-file"></code> on this machine, in plain text.
-      Tokens expire daily around 3:30am IST and must be re-entered.
+      An Analytics Token lasts a year; a daily OAuth access token expires around 3:30am IST
+      and must be re-entered each trading day.
     </p>
   </section>
 

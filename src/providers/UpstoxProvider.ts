@@ -78,9 +78,10 @@ export class UpstoxProvider implements DataProvider {
     };
     if (!this.cfg.accessToken) {
       throw new Error(
-        "No Upstox access token configured. Add one in the Settings panel (or set " +
-          "UPSTOX_ACCESS_TOKEN in .env). Tokens come from the Upstox OAuth login flow and " +
-          "expire daily around 3:30am IST.",
+        "No Upstox token configured. Add one in the Settings panel (or set " +
+          "UPSTOX_ACCESS_TOKEN in .env). Use either an Analytics Token (generated on the " +
+          "Upstox Developer Apps page, read-only, valid 1 year) or a daily OAuth access " +
+          "token (expires ~3:30am IST).",
       );
     }
     this.quoteRateLimitPerSecond = config.upstoxQuoteRateLimitPerSecond;
@@ -94,24 +95,40 @@ export class UpstoxProvider implements DataProvider {
   }
 
   /**
-   * Checks a token against Upstox's profile endpoint, so the settings page can tell a
-   * bad/expired token from a working one before saving. Deliberately status-based rather
-   * than body-shape-based, so it stays correct regardless of the response payload.
+   * Checks a token by making the same kind of market-data call the screener itself relies
+   * on (an LTP quote for the Nifty 50 index).
+   *
+   * Deliberately NOT the /user/profile endpoint: an Upstox Analytics Token (the 1-year,
+   * read-only kind) is scoped to market-data APIs and only reaches Account/Profile
+   * endpoints from a registered static IP, so profile would report a perfectly good
+   * Analytics Token as invalid. Validating against market data tests exactly the access
+   * this app needs. Status-based rather than body-shape-based, so it stays correct
+   * regardless of the response payload.
    */
   static async validateToken(
     token: string,
     baseUrl = config.upstoxBaseUrl,
   ): Promise<{ ok: boolean; message: string }> {
     if (!token.trim()) return { ok: false, message: "Token is empty." };
+    const probe = `${baseUrl}/market-quote/ltp?instrument_key=${encodeURIComponent("NSE_INDEX|Nifty 50")}`;
     try {
-      const res = await fetch(`${baseUrl}/user/profile`, {
+      const res = await fetch(probe, {
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       });
-      if (res.ok) return { ok: true, message: "Token accepted by Upstox." };
+      if (res.ok) return { ok: true, message: "Token works — Upstox market data is reachable." };
       if (res.status === 401 || res.status === 403) {
-        return { ok: false, message: "Upstox rejected this token (401/403). It may be expired — tokens expire daily around 3:30am IST." };
+        return {
+          ok: false,
+          message:
+            "Upstox rejected this token (401/403). Check you pasted an access token or Analytics Token — " +
+            "not your API key/secret, which are not tokens. A daily OAuth access token expires at ~3:30am IST; " +
+            "an Analytics Token lasts a year.",
+        };
       }
-      return { ok: false, message: `Upstox returned HTTP ${res.status}. Token may still be valid; try again shortly.` };
+      return {
+        ok: false,
+        message: `Upstox returned HTTP ${res.status}. The token may still be valid; try again shortly.`,
+      };
     } catch (err) {
       return { ok: false, message: `Could not reach Upstox: ${(err as Error).message}` };
     }
