@@ -4,7 +4,7 @@ import path from "node:path";
 import { appDir } from "../bootstrap.js";
 import type { DataProvider, OptionInstrument, OptionQuote, OptionType } from "../types.js";
 import { config } from "../config.js";
-import { RateLimiter, withRetry } from "../rateLimiter.js";
+import { RateLimiter, sharedRateLimiter, withRetry } from "../rateLimiter.js";
 import { currentSessionDate } from "../marketHours.js";
 
 interface UpstoxConfig {
@@ -140,6 +140,8 @@ export class UpstoxProvider implements DataProvider {
 
   private instrumentsCache: OptionInstrument[] = [];
   private instrumentsCachedAt = 0;
+  /** Trading day the cached list belongs to; contracts roll over daily. */
+  private instrumentsSessionDate = currentSessionDate();
 
   /** Proxy for "previous session's closing OI", captured from the first live quote of each
    *  trading day per instrument, since Upstox's real-time quote endpoint does not expose
@@ -165,14 +167,9 @@ export class UpstoxProvider implements DataProvider {
     }
     this.quoteRateLimitPerSecond = config.upstoxQuoteRateLimitPerSecond;
     // Same windows the Scanner paces against, so a direct getQuotes() caller is held to
-    // the real Upstox limits rather than only the per-second one.
-    this.rateLimiter = new RateLimiter([...this.quoteRateWindows]);
-  }
-
-  /** Releases the internal rate limiter's timer. The app rebuilds its provider on every
-   *  settings save, so without this the timers accumulate for the process's lifetime. */
-  dispose(): void {
-    this.rateLimiter.dispose();
+    // the real Upstox limits rather than only the per-second one. Shared process-wide:
+    // the quota belongs to Upstox, not to this object's lifetime.
+    this.rateLimiter = sharedRateLimiter("upstox:quotes", [...this.quoteRateWindows]);
   }
 
   /** Optionally seed exact previous-day closing OI per instrument_key from a nightly
@@ -267,6 +264,7 @@ export class UpstoxProvider implements DataProvider {
         console.log(`[upstox] using cached contract list (${cached.length.toLocaleString()} option contracts)`);
         this.instrumentsCache = cached;
         this.instrumentsCachedAt = Date.now();
+        this.instrumentsSessionDate = currentSessionDate();
         return cached;
       }
     }
@@ -277,7 +275,9 @@ export class UpstoxProvider implements DataProvider {
     } catch (err) {
       // A refresh that fails must not wipe a working list: keep serving what we have and
       // back off, rather than blanking the dashboard and re-downloading on every tick.
-      if (this.instrumentsCache.length > 0) {
+      // Only within the same session though - an instance left running overnight must not
+      // keep serving yesterday's universe (expired contracts, missing new strikes).
+      if (this.instrumentsCache.length > 0 && this.instrumentsSessionDate === currentSessionDate()) {
         this.instrumentsCachedAt = Date.now();
         console.error(
           `[upstox] contract list refresh failed (${(err as Error).message}); ` +
@@ -319,6 +319,7 @@ export class UpstoxProvider implements DataProvider {
 
     this.instrumentsCache = instruments;
     this.instrumentsCachedAt = Date.now();
+    this.instrumentsSessionDate = currentSessionDate();
     this.writeDiskCache(instruments);
     return instruments;
   }
@@ -342,6 +343,7 @@ export class UpstoxProvider implements DataProvider {
     let lastStatus: number | undefined;
 
     for (const url of candidates) {
+      lastStatus = undefined; // per-candidate: the last attempt's status is what matters
       console.log(`[upstox] downloading contract list from ${url} …`);
       const startedAt = Date.now();
       try {

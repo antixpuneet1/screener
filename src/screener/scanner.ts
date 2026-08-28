@@ -1,5 +1,5 @@
 import type { DataProvider, OptionInstrument, OptionQuote, ScreenerHit } from "../types.js";
-import { RateLimiter, withRetry } from "../rateLimiter.js";
+import { RateLimiter, sharedRateLimiter, withRetry } from "../rateLimiter.js";
 import { config } from "../config.js";
 import { isMarketOpen } from "../marketHours.js";
 import { ScreenerState } from "./state.js";
@@ -47,17 +47,14 @@ export class Scanner {
 
   constructor(private readonly provider: DataProvider) {
     // Honour every window the provider declares, so long-window caps throttle the scan
-    // instead of letting it run headlong into 429s.
-    this.rateLimiter = new RateLimiter(
+    // instead of letting it run headlong into 429s. Shared per provider so a settings
+    // save carries the request history over instead of resetting it.
+    this.rateLimiter = sharedRateLimiter(
+      `scanner:${provider.name}`,
       provider.quoteRateWindows && provider.quoteRateWindows.length > 0
         ? [...provider.quoteRateWindows]
         : provider.quoteRateLimitPerSecond,
     );
-  }
-
-  /** Releases the rate limiter's timer. Call when replacing this Scanner. */
-  dispose(): void {
-    this.rateLimiter.dispose();
   }
 
   async runCycle(onProgress?: (p: ScanProgress) => void): Promise<ScanCycleResult> {
@@ -94,9 +91,10 @@ export class Scanner {
       detail: "downloading contract list (first run can take a minute)",
     });
     try {
-      instruments = await withRetry(() => this.provider.getOptionInstruments(), {
-        maxRetries: config.maxRetries,
-      });
+      // No outer retry: the provider already retries each candidate source internally,
+      // and wrapping it again re-downloaded tens of megabytes several times over
+      // whenever the aggregate error message happened to look transient.
+      instruments = await this.provider.getOptionInstruments();
     } catch (err) {
       errors.push(`Failed to load instrument universe: ${(err as Error).message}`);
       return {

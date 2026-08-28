@@ -21,7 +21,6 @@ export class RateLimiter {
   private readonly windows: RateWindow[];
   private readonly longestWindowMs: number;
   private timer: ReturnType<typeof setInterval>;
-  private disposed = false;
 
   constructor(windows: number | RateWindow[]) {
     // A bare number keeps the old "requests per second" form working.
@@ -68,32 +67,33 @@ export class RateLimiter {
 
   /** Resolves once a slot is available under every configured window. */
   acquire(): Promise<void> {
-    // A disposed limiter stops throttling entirely rather than queueing: its drain timer
-    // is gone, so anything queued here would wait forever. Callers still holding a
-    // disposed limiter belong to a cycle that is being replaced — letting them run to
-    // completion unthrottled is right, and the replacement limiter governs new work.
-    if (this.disposed) return Promise.resolve();
     return new Promise((resolve) => {
       this.queue.push(resolve);
       this.drain();
     });
   }
 
-  /**
-   * Stops the internal timer. Call when discarding a limiter — the app rebuilds its
-   * provider (and limiter) on every settings save, so without this the timers pile up.
-   *
-   * Pending `acquire()` callers are released rather than dropped. A settings save can
-   * land mid-cycle, and a dropped promise never settles: `runCycle` would hang forever
-   * with `cycleInFlight` stuck true, silently ending all scanning until restart.
-   */
-  dispose(): void {
-    this.disposed = true;
-    clearInterval(this.timer);
-    const pending = this.queue;
-    this.queue = [];
-    for (const resolve of pending) resolve();
+}
+
+const sharedLimiters = new Map<string, RateLimiter>();
+
+/**
+ * One limiter per remote API, shared for the process lifetime.
+ *
+ * A limiter models the *vendor's* quota, which does not reset because this app rebuilt
+ * its provider objects after a settings save. Creating a fresh one per rebuild both
+ * leaked timers and lost the request history, so a new limiter believed it had full
+ * headroom while Upstox was still counting the previous minute's calls. Sharing also
+ * removes the need to dispose a limiter a running cycle still holds — the source of
+ * several bugs where scanning either wedged or lost all pacing mid-scan.
+ */
+export function sharedRateLimiter(key: string, windows: number | RateWindow[]): RateLimiter {
+  let existing = sharedLimiters.get(key);
+  if (!existing) {
+    existing = new RateLimiter(windows);
+    sharedLimiters.set(key, existing);
   }
+  return existing;
 }
 
 /** Index of the first element >= value, in an ascending array. */

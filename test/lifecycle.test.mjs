@@ -1,5 +1,5 @@
 // Regression tests for two bugs that silently disabled the app.
-import { RateLimiter } from "../src/rateLimiter.ts";
+import { sharedRateLimiter } from "../src/rateLimiter.ts";
 import { UpstoxProvider } from "../src/providers/UpstoxProvider.ts";
 
 let failures = 0;
@@ -15,33 +15,13 @@ async function check(label, fn) {
 
 console.log("lifecycle:");
 
-await check("dispose() releases waiters instead of hanging the cycle", async () => {
-  // A settings save disposes the limiter mid-cycle. If dispose drops queued acquire()
-  // promises they never settle, runCycle never returns, cycleInFlight stays true and
-  // scanning stops permanently until restart.
-  const rl = new RateLimiter([{ limit: 1, windowMs: 60_000 }]);
-  await rl.acquire(); // consume the only slot
-  const queued = rl.acquire(); // must wait
-
-  let settled = false;
-  queued.then(() => { settled = true; });
-
-  rl.dispose();
-  await Promise.race([queued, new Promise((_, rej) => setTimeout(() => rej(new Error("acquire() never settled after dispose")), 2000))]);
-  if (!settled) throw new Error("acquire() did not resolve");
-});
-
-await check("a disposed limiter stops throttling instead of wedging its last cycle", async () => {
-  // Releasing queued waiters is not enough: the cycle being replaced keeps calling
-  // acquire(), and with the drain timer already cleared each new call would queue
-  // forever. That left cycleInFlight stuck true and silently ended all scanning.
-  const rl = new RateLimiter([{ limit: 1, windowMs: 60_000 }]);
-  await rl.acquire();
-  rl.dispose();
-  await Promise.race([
-    rl.acquire(),
-    new Promise((_, rej) => setTimeout(() => rej(new Error("acquire() after dispose never settled")), 2000)),
-  ]);
+await check("the rate limiter is shared across rebuilds, not recreated", async () => {
+  // A settings save rebuilds provider and scanner. A fresh limiter each time leaked a
+  // timer and reset the request history, so it believed it had headroom Upstox had
+  // already spent - and disposing the old one stranded the in-flight cycle.
+  const a = sharedRateLimiter("test:key", [{ limit: 5, windowMs: 1000 }]);
+  const b = sharedRateLimiter("test:key", [{ limit: 5, windowMs: 1000 }]);
+  if (a !== b) throw new Error("a rebuild created a second limiter for the same API");
 });
 
 await check("an absent oi does not pin the change-in-OI baseline to zero", async () => {
@@ -67,6 +47,9 @@ await check("an absent oi does not pin the change-in-OI baseline to zero", async
 });
 
 await check("a failed refresh keeps the already-loaded contract list", async () => {
+  // check() clears the cache, but be explicit: a same-day instruments-cache.json left in
+  // cwd by actually running the app would otherwise short-circuit the cold-start path.
+  try { (await import("node:fs")).unlinkSync("instruments-cache.json"); } catch {}
   const p = new UpstoxProvider({ accessToken: "t", instrumentsUrl: "https://x.test/a.json.gz" });
   const { gzipSync } = await import("node:zlib");
   const rows = [

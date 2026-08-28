@@ -96,9 +96,8 @@ let cycleInFlight = false;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 
 function buildProvider(): void {
-  // Release the previous scanner's and provider's timers; this runs on every settings save.
-  scanner?.dispose();
-  provider?.dispose?.();
+  // No teardown needed: rate limiters are shared per provider and outlive rebuilds, so
+  // a settings save cannot strand an in-flight cycle or leak a timer.
   try {
     provider = createDataProvider();
     scanner = new Scanner(provider);

@@ -132,19 +132,29 @@ export function openAppWindow(url: string, onClosed?: () => void): void {
 
     if (onClosed) {
       const launchedAt = Date.now();
-      child.on("exit", () => {
-        // Chromium's ProcessSingleton makes the launcher hand off to an already-running
-        // instance for this profile and exit immediately. That is not the user closing
-        // the window, and treating it as such would kill the server we just started.
+      child.on("exit", (code) => {
         const ranFor = Date.now() - launchedAt;
-        if (ranFor < HANDOFF_EXIT_MS) {
+        if (ranFor >= HANDOFF_EXIT_MS) {
+          onClosed(); // a real window that the user closed
+          return;
+        }
+        // Exited almost immediately. Two very different causes, told apart by exit code:
+        // 0 means Chromium's ProcessSingleton handed off to an existing window for this
+        // profile (fine - leave the server up); non-zero means the launch itself failed
+        // (locked profile, policy blocking --app), which must fall back to a browser or
+        // the user is left with no window and an invisible server holding the port.
+        if (code === 0) {
           console.log(
-            `[screener] App-window launcher exited after ${ranFor}ms (handed off to an ` +
-              `existing window); leaving the server running.`,
+            `[screener] App-window launcher handed off to an existing window after ${ranFor}ms; ` +
+              `leaving the server running.`,
           );
           return;
         }
-        onClosed();
+        console.error(
+          `[screener] App window failed to launch (exit code ${code} after ${ranFor}ms); ` +
+            `falling back to your default browser.`,
+        );
+        openInDefaultBrowser(url, onClosed);
       });
     }
     return;
