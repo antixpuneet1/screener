@@ -85,4 +85,7 @@ export interface DataProvider {
    * that only have a per-second cap can omit it.
    */
   readonly quoteRateWindows?: ReadonlyArray<{ limit: number; windowMs: number }>;
+
+  /** Releases any timers/resources. Called when the provider is replaced. */
+  dispose?(): void;
 }

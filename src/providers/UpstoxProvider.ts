@@ -1,4 +1,4 @@
-import { gunzipSync } from "node:zlib";
+import { gunzip } from "node:zlib";
 import fs from "node:fs";
 import path from "node:path";
 import { appDir } from "../bootstrap.js";
@@ -66,6 +66,46 @@ function num(v: unknown): number | null {
 }
 
 /**
+ * Decompresses (if needed) and parses the instrument payload off the event loop.
+ *
+ * This file is tens of megabytes; doing gunzip and JSON.parse synchronously froze the
+ * HTTP server and WebSocket hub for the whole duration, so the dashboard stopped
+ * responding exactly when it was meant to be reporting progress. Also tolerates a plain
+ * (non-gzipped) JSON body, since the endpoint has served both.
+ */
+async function parseInstrumentPayload(raw: Buffer): Promise<UpstoxInstrumentRow[]> {
+  // gzip magic number; anything else is treated as plain JSON.
+  const isGzip = raw.length > 2 && raw[0] === 0x1f && raw[1] === 0x8b;
+
+  let text: string;
+  if (isGzip) {
+    const unzipped = await new Promise<Buffer>((resolve, reject) => {
+      gunzip(raw, (err, out) => (err ? reject(err) : resolve(out)));
+    });
+    text = unzipped.toString("utf-8");
+  } else {
+    text = raw.toString("utf-8");
+  }
+
+  // Yield once before the parse so pending socket writes flush first.
+  await new Promise((r) => setImmediate(r));
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (err) {
+    throw new Error(
+      `the response was not readable JSON (${(err as Error).message}); ` +
+        `first bytes: ${JSON.stringify(text.slice(0, 80))}`,
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`expected a JSON array of instruments, got ${typeof parsed}`);
+  }
+  return parsed as UpstoxInstrumentRow[];
+}
+
+/**
  * Live DataProvider backed by the Upstox API.
  *
  * The full F&O option universe is derived automatically from Upstox's own published
@@ -124,7 +164,15 @@ export class UpstoxProvider implements DataProvider {
       );
     }
     this.quoteRateLimitPerSecond = config.upstoxQuoteRateLimitPerSecond;
-    this.rateLimiter = new RateLimiter(this.quoteRateLimitPerSecond);
+    // Same windows the Scanner paces against, so a direct getQuotes() caller is held to
+    // the real Upstox limits rather than only the per-second one.
+    this.rateLimiter = new RateLimiter([...this.quoteRateWindows]);
+  }
+
+  /** Releases the internal rate limiter's timer. The app rebuilds its provider on every
+   *  settings save, so without this the timers accumulate for the process's lifetime. */
+  dispose(): void {
+    this.rateLimiter.dispose();
   }
 
   /** Optionally seed exact previous-day closing OI per instrument_key from a nightly
@@ -222,40 +270,7 @@ export class UpstoxProvider implements DataProvider {
       return cached;
     }
 
-    console.log(`[upstox] downloading contract list from ${this.cfg.instrumentsUrl} …`);
-    const startedAt = Date.now();
-
-    const res = await withRetry(
-      () => fetch(this.cfg.instrumentsUrl, { signal: AbortSignal.timeout(INSTRUMENTS_TIMEOUT_MS) }),
-      { maxRetries: INSTRUMENTS_MAX_RETRIES },
-    );
-    if (!res.ok) {
-      const body = (await res.text().catch(() => "")).slice(0, 200);
-      throw new HttpError(
-        res.status,
-        `Could not download the Upstox contract list (HTTP ${res.status}) from ${this.cfg.instrumentsUrl}.` +
-          (res.status === 403
-            ? " Upstox blocks automated downloads of this file for some accounts."
-            : "") +
-          (body ? ` ${body}` : ""),
-      );
-    }
-
-    const gzipped = Buffer.from(await res.arrayBuffer());
-    console.log(
-      `[upstox] downloaded ${(gzipped.length / 1e6).toFixed(1)} MB in ${((Date.now() - startedAt) / 1000).toFixed(1)}s, decompressing …`,
-    );
-
-    let rows: UpstoxInstrumentRow[];
-    try {
-      rows = JSON.parse(gunzipSync(gzipped).toString("utf-8")) as UpstoxInstrumentRow[];
-    } catch (err) {
-      throw new Error(
-        `Downloaded the contract list but could not read it (${(err as Error).message}). ` +
-          `The file at ${this.cfg.instrumentsUrl} may not be the expected gzipped JSON.`,
-      );
-    }
-    console.log(`[upstox] parsed ${rows.length.toLocaleString()} instrument rows`);
+    const rows = await this.downloadInstrumentRows();
 
     const instruments: OptionInstrument[] = [];
     for (const row of rows) {
@@ -290,6 +305,68 @@ export class UpstoxProvider implements DataProvider {
     this.instrumentsCachedAt = Date.now();
     this.writeDiskCache(instruments);
     return instruments;
+  }
+
+  /**
+   * Downloads and parses the instrument master, trying each candidate source in turn.
+   *
+   * Two things matter here. First, a bare Node fetch sends no User-Agent, and CDNs
+   * commonly reject that with a 403 — which matches the reports of this file being
+   * "blocked for automated access", so browser-like headers are sent. Second, the
+   * exchange-specific file has been observed missing or empty at times, so the
+   * all-exchanges file is tried as a fallback rather than failing outright.
+   */
+  private async downloadInstrumentRows(): Promise<UpstoxInstrumentRow[]> {
+    const candidates = [
+      this.cfg.instrumentsUrl,
+      "https://assets.upstox.com/market-quote/instruments/exchange/complete.json.gz",
+    ].filter((u, i, a) => a.indexOf(u) === i);
+
+    const failures: string[] = [];
+
+    for (const url of candidates) {
+      console.log(`[upstox] downloading contract list from ${url} …`);
+      const startedAt = Date.now();
+      try {
+        const res = await withRetry(
+          () =>
+            fetch(url, {
+              signal: AbortSignal.timeout(INSTRUMENTS_TIMEOUT_MS),
+              headers: {
+                // Without these a plain Node request looks like a bot to the CDN.
+                "User-Agent":
+                  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                Accept: "application/gzip,application/json,*/*",
+                "Accept-Encoding": "gzip, deflate",
+              },
+            }),
+          { maxRetries: INSTRUMENTS_MAX_RETRIES },
+        );
+
+        if (!res.ok) {
+          const body = (await res.text().catch(() => "")).slice(0, 150);
+          failures.push(`${url} → HTTP ${res.status}${body ? ` (${body})` : ""}`);
+          continue;
+        }
+
+        const raw = Buffer.from(await res.arrayBuffer());
+        console.log(
+          `[upstox] downloaded ${(raw.length / 1e6).toFixed(1)} MB in ${((Date.now() - startedAt) / 1000).toFixed(1)}s, decompressing …`,
+        );
+
+        const rows = await parseInstrumentPayload(raw);
+        console.log(`[upstox] parsed ${rows.length.toLocaleString()} instrument rows`);
+        return rows;
+      } catch (err) {
+        failures.push(`${url} → ${(err as Error).message}`);
+      }
+    }
+
+    throw new Error(
+      `Could not obtain the Upstox contract list. Tried:\n  ${failures.join("\n  ")}\n` +
+        `If these are 403s, the download is being blocked rather than your token being wrong — ` +
+        `set UPSTOX_INSTRUMENTS_URL to a reachable copy of the instrument file.`,
+    );
   }
 
   /** Same-day cached contract list, or null when absent/stale/unreadable. */
