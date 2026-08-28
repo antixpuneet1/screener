@@ -14,3 +14,6 @@ instruments-cache.json
 # the SEA blob, and the assembled release folder are all build artifacts.
 build/
 release/
+
+# Chromium profile for the app window.
+.app-window/

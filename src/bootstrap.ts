@@ -101,11 +101,15 @@ function findAppWindowHost(): string | null {
  * normal browsing session so it behaves like an independent application. Falls back to
  * the default browser only when no Chromium-based browser can be found.
  */
-export function openAppWindow(url: string): void {
+export function openAppWindow(url: string, onClosed?: () => void): void {
   const host = findAppWindowHost();
 
   if (host) {
     const profileDir = path.join(appDir(), ".app-window");
+    // Not detached: the window is this app's UI, so its lifetime is the app's lifetime
+    // and `onClosed` can shut the server down when the user closes it. The dedicated
+    // --user-data-dir also keeps this a distinct browser process rather than a tab
+    // adopted by an already-running Edge/Chrome, which is what makes exit observable.
     const child = spawn(
       host,
       [
@@ -115,13 +119,13 @@ export function openAppWindow(url: string): void {
         "--no-first-run",
         "--no-default-browser-check",
       ],
-      { detached: true, stdio: "ignore" },
+      { stdio: "ignore" },
     );
     child.on("error", (err) => {
       console.error(`[screener] Could not open app window (${err.message}); falling back.`);
       openInDefaultBrowser(url);
     });
-    child.unref();
+    if (onClosed) child.on("exit", onClosed);
     return;
   }
 

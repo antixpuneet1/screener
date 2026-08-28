@@ -2,7 +2,7 @@
 //   "Quote batch failed (500 contracts, ...): Cannot read properties of null (reading 'open')"
 // Feeds UpstoxProvider the sparse/null shapes Upstox returns for contracts that have not
 // traded, and asserts one bad row can no longer take down a whole batch.
-import { UpstoxProvider } from "./src/providers/UpstoxProvider.ts";
+import { UpstoxProvider } from "../src/providers/UpstoxProvider.ts";
 
 const provider = new UpstoxProvider({ accessToken: "test-token" });
 

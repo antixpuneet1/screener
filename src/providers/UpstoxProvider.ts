@@ -212,7 +212,9 @@ export class UpstoxProvider implements DataProvider {
 
     // A same-day cache on disk makes restarts instant instead of re-downloading tens of
     // megabytes, and keeps the app usable if the download starts failing mid-session.
-    const cached = this.readDiskCache();
+    // Only consulted on cold start: once this process has its own copy, honour
+    // instrumentRefreshMs so newly listed strikes and expiries are picked up intraday.
+    const cached = this.instrumentsCachedAt === 0 ? this.readDiskCache() : null;
     if (cached) {
       console.log(`[upstox] using cached contract list (${cached.length.toLocaleString()} option contracts)`);
       this.instrumentsCache = cached;
@@ -346,14 +348,17 @@ export class UpstoxProvider implements DataProvider {
       const ohlc = q.ohlc ?? null;
       const open = num(ohlc?.open);
       const low = num(ohlc?.low);
+      const oi = num(q.oi) ?? 0;
+
+      // Seed the change-in-OI baseline before the untraded check below. A contract that
+      // first trades mid-session is skipped on earlier passes, so capturing the baseline
+      // only once it trades would anchor to post-trade OI and under-report the change.
+      if (!this.oiBaseline.has(token)) this.oiBaseline.set(token, oi);
+      const baseline = this.oiBaseline.get(token) ?? oi;
 
       // No open/low means the contract has not traded this session: it cannot satisfy
       // Open = Low, so there is nothing to report and nothing to warn about.
       if (open === null || low === null) continue;
-
-      const oi = num(q.oi) ?? 0;
-      if (!this.oiBaseline.has(token)) this.oiBaseline.set(token, oi);
-      const baseline = this.oiBaseline.get(token) ?? oi;
 
       out.set(token, {
         instrumentToken: token,

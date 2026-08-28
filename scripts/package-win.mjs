@@ -156,14 +156,14 @@ const DIST_README = `F&O O=L Screener - Windows build
 This folder is a complete, self-contained copy of the screener. Keep these
 two items together in the same folder:
 
-  fno-ol-screener.exe   <- the app
+  fno-ol-screener-<build>.exe  <- the app (name includes the build id)
   public/               <- the dashboard's web assets (required)
 
 Settings are entered in the app itself and saved to settings.json here.
 
 Setup
 -----
-1. Double-click fno-ol-screener.exe. No config file editing needed.
+1. Double-click fno-ol-screener-<build>.exe. No config file editing needed.
 2. Your browser opens to the dashboard. Click "Settings" (top right).
 3. Paste your Upstox access token, click "Test token" to confirm it works,
    then "Save". The screener starts immediately - no restart required.
@@ -172,11 +172,15 @@ You do NOT need to create a .env file. It is supported (see .env.example)
 if you prefer setting things that way, but the Settings page is the easy
 path and overrides .env.
 
-Getting an Upstox access token
--------------------------------
-Tokens come from the Upstox OAuth login flow and EXPIRE DAILY around
-3:30am IST, so expect to paste a fresh one each trading day. See the
-project README for the four-step login flow.
+Getting an Upstox token
+------------------------
+Two kinds work. Easiest is an ANALYTICS TOKEN: generate it on the Upstox
+Developer Apps page, it is read-only, and it lasts a YEAR - no daily
+re-pasting. The alternative is an OAuth access token, which expires
+daily around 3:30am IST.
+
+Note your API key and API secret are NOT tokens; pasting either is the
+most common cause of a 401.
 
 Just want to see it work first?
 --------------------------------

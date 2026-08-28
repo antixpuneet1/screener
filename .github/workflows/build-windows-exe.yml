@@ -26,6 +26,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Tests
+        run: npm test
+
       # The packaging script downloads the official Windows node.exe and injects the
       # bundled app into it, so the Windows build runs fine on a Linux runner.
       - name: Package Windows executable

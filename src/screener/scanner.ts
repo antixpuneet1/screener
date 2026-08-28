@@ -55,6 +55,11 @@ export class Scanner {
     );
   }
 
+  /** Releases the rate limiter's timer. Call when replacing this Scanner. */
+  dispose(): void {
+    this.rateLimiter.dispose();
+  }
+
   async runCycle(onProgress?: (p: ScanProgress) => void): Promise<ScanCycleResult> {
     const cycleStart = Date.now();
     const marketOpen = isMarketOpen();

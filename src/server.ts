@@ -47,9 +47,41 @@ const publicDir = isPackaged
 
 const app = express();
 const server = http.createServer(app);
-const hub = new WsHub(server);
+const hub = new WsHub(server, () => currentStatePayload());
 
 app.use(express.json({ limit: "16kb" }));
+
+/**
+ * Rejects cross-origin state-changing requests.
+ *
+ * The server listens on localhost, but that does not make it private: any page the user
+ * visits in any browser can POST to http://localhost:4000. Without this, a malicious
+ * site could silently wipe the stored Upstox token or repoint the data source. Only
+ * same-origin requests (the dashboard itself) are allowed to mutate anything.
+ */
+app.use((req, res, next) => {
+  if (req.method === "GET" || req.method === "HEAD") return next();
+
+  const origin = req.get("origin");
+  const host = req.get("host");
+  if (origin) {
+    let originHost: string;
+    try {
+      originHost = new URL(origin).host;
+    } catch {
+      res.status(403).json({ ok: false, message: "Bad Origin header." });
+      return;
+    }
+    if (originHost !== host) {
+      res.status(403).json({ ok: false, message: "Cross-origin requests are not allowed." });
+      return;
+    }
+  }
+  // Browsers always send Origin on cross-origin POSTs; a missing Origin means a
+  // same-origin form/fetch or a non-browser client such as curl, which is fine locally.
+  next();
+});
+
 app.use(express.static(publicDir));
 
 // --- Provider lifecycle -----------------------------------------------------------
@@ -64,6 +96,8 @@ let cycleInFlight = false;
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 
 function buildProvider(): void {
+  // Release the previous scanner's rate-limiter timer; this runs on every settings save.
+  scanner?.dispose();
   try {
     provider = createDataProvider();
     scanner = new Scanner(provider);
@@ -214,11 +248,14 @@ app.post("/api/settings/clear-token", (_req, res) => {
 
 // --- Startup ----------------------------------------------------------------------
 
+// Logging is installed first so that anything the provider reports while starting up —
+// including "no token configured", the message the docs tell users to look for — is
+// actually captured in screener.log.
+const logPath = startFileLogging();
+
 buildProvider();
 restartTicker();
 void tick();
-
-const logPath = startFileLogging();
 
 /**
  * Listens on the first free port at or after `config.port`.
@@ -228,9 +265,11 @@ const logPath = startFileLogging();
  * nothing. Stepping to the next port keeps it launchable instead.
  */
 function listenOnFreePort(startPort: number, attemptsLeft = 10): void {
-  // Bound to loopback deliberately: the dashboard accepts an Upstox access token, so it
-  // must not be reachable from other machines on the network.
-  server.listen(startPort, "127.0.0.1");
+  // Handlers are re-registered per attempt, so clear the previous attempt's: a `once`
+  // listener that never fired stays attached, and after a retry every stale "listening"
+  // handler would fire at once — printing the banner twice and opening two app windows.
+  server.removeAllListeners("error");
+  server.removeAllListeners("listening");
 
   server.once("error", (err: NodeJS.ErrnoException) => {
     if (err.code === "EADDRINUSE" && attemptsLeft > 0) {
@@ -242,21 +281,34 @@ function listenOnFreePort(startPort: number, attemptsLeft = 10): void {
     process.exit(1);
   });
 
-  server.once("listening", () => {
-    const port = (server.address() as { port: number }).port;
-    const url = `http://localhost:${port}`;
-    console.log(`F&O O=L screener  |  build ${BUILD_ID}`);
-    console.log(`Listening on ${url} (provider=${provider?.name ?? "not configured"})`);
-    if (logPath) console.log(`Log file: ${logPath}`);
-    if (providerError) {
-      console.log("[screener] No data source configured yet — use the Settings button in the app window.");
-    }
-    const shouldOpen = config.openBrowser === "auto" ? isPackaged : config.openBrowser === "true";
-    if (shouldOpen) {
-      console.log("Opening the app window...");
-      openAppWindow(url);
-    }
-  });
+  server.once("listening", onListening);
+
+  // Bound to loopback deliberately: the dashboard accepts an Upstox access token, so it
+  // must not be reachable from other machines on the network.
+  server.listen(startPort, "127.0.0.1");
+}
+
+function onListening(): void {
+  const port = (server.address() as { port: number }).port;
+  const url = `http://localhost:${port}`;
+  console.log(`F&O O=L screener  |  build ${BUILD_ID}`);
+  console.log(`Listening on ${url} (provider=${provider?.name ?? "not configured"})`);
+  if (logPath) console.log(`Log file: ${logPath}`);
+  if (providerError) {
+    console.log(`[screener] Not configured: ${providerError}`);
+    console.log("[screener] Use the Settings button in the app window to add your Upstox token.");
+  }
+  const shouldOpen = config.openBrowser === "auto" ? isPackaged : config.openBrowser === "true";
+  if (shouldOpen) {
+    console.log("Opening the app window...");
+    // Quitting the app window shuts the server down. Without this the process survives
+    // with no console and no window, so every relaunch orphans another copy holding a
+    // port — and several orphans then scan the same account in parallel.
+    openAppWindow(url, () => {
+      console.log("[screener] App window closed — shutting down.");
+      process.exit(0);
+    });
+  }
 }
 
 listenOnFreePort(config.port);

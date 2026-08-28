@@ -10,7 +10,8 @@
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "package:win": "node scripts/package-win.mjs"
+    "package:win": "node scripts/package-win.mjs",
+    "test": "tsx test/quote-parsing.test.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

@@ -6,10 +6,14 @@ export class WsHub {
   private wss: WebSocketServer;
   private lastPayload: string | null = null;
 
-  constructor(server: Server) {
+  /** Builds the current state for a client that connects before any broadcast has
+   *  happened — otherwise a first run with no token configured shows "connecting…"
+   *  forever, because nothing is ever pushed to tell it what is wrong. */
+  constructor(server: Server, private readonly snapshot?: () => unknown) {
     this.wss = new WebSocketServer({ server, path: "/ws" });
     this.wss.on("connection", (socket: WebSocket) => {
-      if (this.lastPayload) socket.send(this.lastPayload);
+      const initial = this.lastPayload ?? (this.snapshot ? JSON.stringify(this.snapshot()) : null);
+      if (initial) socket.send(initial);
     });
   }
 

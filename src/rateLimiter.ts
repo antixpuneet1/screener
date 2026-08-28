@@ -73,9 +73,11 @@ export class RateLimiter {
     });
   }
 
-  /** How long a request queued right now would wait, for progress reporting. */
-  estimatedWaitMs(): number {
-    return this.waitTimeMs(Date.now()) + this.queue.length * 0;
+  /** Stops the internal timer. Call when discarding a limiter — the app rebuilds its
+   *  provider (and limiter) on every settings save, so without this the timers pile up. */
+  dispose(): void {
+    clearInterval(this.timer);
+    this.queue = [];
   }
 }
 
