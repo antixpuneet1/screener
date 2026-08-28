@@ -21,6 +21,7 @@ export class RateLimiter {
   private readonly windows: RateWindow[];
   private readonly longestWindowMs: number;
   private timer: ReturnType<typeof setInterval>;
+  private disposed = false;
 
   constructor(windows: number | RateWindow[]) {
     // A bare number keeps the old "requests per second" form working.
@@ -67,17 +68,31 @@ export class RateLimiter {
 
   /** Resolves once a slot is available under every configured window. */
   acquire(): Promise<void> {
+    // A disposed limiter stops throttling entirely rather than queueing: its drain timer
+    // is gone, so anything queued here would wait forever. Callers still holding a
+    // disposed limiter belong to a cycle that is being replaced — letting them run to
+    // completion unthrottled is right, and the replacement limiter governs new work.
+    if (this.disposed) return Promise.resolve();
     return new Promise((resolve) => {
       this.queue.push(resolve);
       this.drain();
     });
   }
 
-  /** Stops the internal timer. Call when discarding a limiter — the app rebuilds its
-   *  provider (and limiter) on every settings save, so without this the timers pile up. */
+  /**
+   * Stops the internal timer. Call when discarding a limiter — the app rebuilds its
+   * provider (and limiter) on every settings save, so without this the timers pile up.
+   *
+   * Pending `acquire()` callers are released rather than dropped. A settings save can
+   * land mid-cycle, and a dropped promise never settles: `runCycle` would hang forever
+   * with `cycleInFlight` stuck true, silently ending all scanning until restart.
+   */
   dispose(): void {
+    this.disposed = true;
     clearInterval(this.timer);
+    const pending = this.queue;
     this.queue = [];
+    for (const resolve of pending) resolve();
   }
 }
 

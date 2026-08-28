@@ -258,19 +258,35 @@ export class UpstoxProvider implements DataProvider {
     const isStale = Date.now() - this.instrumentsCachedAt > config.instrumentRefreshMs;
     if (this.instrumentsCache.length > 0 && !isStale) return this.instrumentsCache;
 
-    // A same-day cache on disk makes restarts instant instead of re-downloading tens of
-    // megabytes, and keeps the app usable if the download starts failing mid-session.
-    // Only consulted on cold start: once this process has its own copy, honour
-    // instrumentRefreshMs so newly listed strikes and expiries are picked up intraday.
-    const cached = this.instrumentsCachedAt === 0 ? this.readDiskCache() : null;
-    if (cached) {
-      console.log(`[upstox] using cached contract list (${cached.length.toLocaleString()} option contracts)`);
-      this.instrumentsCache = cached;
-      this.instrumentsCachedAt = Date.now();
-      return cached;
+    // On a cold start, a same-day cache on disk makes startup instant instead of
+    // re-downloading tens of megabytes. On a later refresh it is skipped, so that
+    // instrumentRefreshMs still picks up newly listed strikes and expiries intraday.
+    if (this.instrumentsCachedAt === 0) {
+      const cached = this.readDiskCache();
+      if (cached) {
+        console.log(`[upstox] using cached contract list (${cached.length.toLocaleString()} option contracts)`);
+        this.instrumentsCache = cached;
+        this.instrumentsCachedAt = Date.now();
+        return cached;
+      }
     }
 
-    const rows = await this.downloadInstrumentRows();
+    let rows: UpstoxInstrumentRow[];
+    try {
+      rows = await this.downloadInstrumentRows();
+    } catch (err) {
+      // A refresh that fails must not wipe a working list: keep serving what we have and
+      // back off, rather than blanking the dashboard and re-downloading on every tick.
+      if (this.instrumentsCache.length > 0) {
+        this.instrumentsCachedAt = Date.now();
+        console.error(
+          `[upstox] contract list refresh failed (${(err as Error).message}); ` +
+            `continuing with the ${this.instrumentsCache.length.toLocaleString()} contracts already loaded.`,
+        );
+        return this.instrumentsCache;
+      }
+      throw err;
+    }
 
     const instruments: OptionInstrument[] = [];
     for (const row of rows) {
@@ -323,6 +339,7 @@ export class UpstoxProvider implements DataProvider {
     ].filter((u, i, a) => a.indexOf(u) === i);
 
     const failures: string[] = [];
+    let lastStatus: number | undefined;
 
     for (const url of candidates) {
       console.log(`[upstox] downloading contract list from ${url} …`);
@@ -345,6 +362,7 @@ export class UpstoxProvider implements DataProvider {
 
         if (!res.ok) {
           const body = (await res.text().catch(() => "")).slice(0, 150);
+          lastStatus = res.status;
           failures.push(`${url} → HTTP ${res.status}${body ? ` (${body})` : ""}`);
           continue;
         }
@@ -362,11 +380,15 @@ export class UpstoxProvider implements DataProvider {
       }
     }
 
-    throw new Error(
+    const message =
       `Could not obtain the Upstox contract list. Tried:\n  ${failures.join("\n  ")}\n` +
-        `If these are 403s, the download is being blocked rather than your token being wrong — ` +
-        `set UPSTOX_INSTRUMENTS_URL to a reachable copy of the instrument file.`,
-    );
+      `If these are 403s, the download is being blocked rather than your token being wrong — ` +
+      `set UPSTOX_INSTRUMENTS_URL to a reachable copy of the instrument file.`;
+
+    // Carry the HTTP status through so the caller's retry policy still classifies this
+    // correctly: a 429/503 stays retryable, while a 403 is not retried pointlessly.
+    // Flattening to a bare Error would lose that and mis-handle both directions.
+    throw lastStatus === undefined ? new Error(message) : new HttpError(lastStatus, message);
   }
 
   /** Same-day cached contract list, or null when absent/stale/unreadable. */
@@ -425,12 +447,17 @@ export class UpstoxProvider implements DataProvider {
       const ohlc = q.ohlc ?? null;
       const open = num(ohlc?.open);
       const low = num(ohlc?.low);
-      const oi = num(q.oi) ?? 0;
+      const reportedOi = num(q.oi);
+      const oi = reportedOi ?? 0;
 
-      // Seed the change-in-OI baseline before the untraded check below. A contract that
-      // first trades mid-session is skipped on earlier passes, so capturing the baseline
-      // only once it trades would anchor to post-trade OI and under-report the change.
-      if (!this.oiBaseline.has(token)) this.oiBaseline.set(token, oi);
+      // Seed the change-in-OI baseline before the untraded check below, so a contract
+      // that first trades mid-session anchors to its pre-trade OI rather than its
+      // post-trade OI. Only seed from a genuinely reported figure: treating an absent
+      // oi as 0 would fix the baseline at zero and later report the contract's entire
+      // open interest as if it were the day's change.
+      if (reportedOi !== null && !this.oiBaseline.has(token)) {
+        this.oiBaseline.set(token, reportedOi);
+      }
       const baseline = this.oiBaseline.get(token) ?? oi;
 
       // No open/low means the contract has not traded this session: it cannot satisfy

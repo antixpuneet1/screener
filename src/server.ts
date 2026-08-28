@@ -266,13 +266,14 @@ void tick();
  * nothing. Stepping to the next port keeps it launchable instead.
  */
 function listenOnFreePort(startPort: number, attemptsLeft = 10): void {
-  // Handlers are re-registered per attempt, so clear the previous attempt's: a `once`
-  // listener that never fired stays attached, and after a retry every stale "listening"
-  // handler would fire at once — printing the banner twice and opening two app windows.
-  server.removeAllListeners("error");
-  server.removeAllListeners("listening");
-
-  server.once("error", (err: NodeJS.ErrnoException) => {
+  // Remove only this function's own handlers between attempts. A `once` listener that
+  // never fired stays attached, so without this every stale "listening" handler fires at
+  // once after a retry — printing the banner twice and opening two app windows. Named
+  // references rather than removeAllListeners(): the WebSocket server attaches its own
+  // "listening"/"error" handlers to this same http.Server, and clearing those would
+  // break /ws.
+  const onError = (err: NodeJS.ErrnoException): void => {
+    cleanup();
     if (err.code === "EADDRINUSE" && attemptsLeft > 0) {
       console.log(`[screener] Port ${startPort} is busy, trying ${startPort + 1}...`);
       listenOnFreePort(startPort + 1, attemptsLeft - 1);
@@ -280,9 +281,18 @@ function listenOnFreePort(startPort: number, attemptsLeft = 10): void {
     }
     console.error(`[screener] Could not start the server: ${err.message}`);
     process.exit(1);
-  });
+  };
+  const onReady = (): void => {
+    cleanup();
+    onListening();
+  };
+  const cleanup = (): void => {
+    server.off("error", onError);
+    server.off("listening", onReady);
+  };
 
-  server.once("listening", onListening);
+  server.once("error", onError);
+  server.once("listening", onReady);
 
   // Bound to loopback deliberately: the dashboard accepts an Upstox access token, so it
   // must not be reachable from other machines on the network.

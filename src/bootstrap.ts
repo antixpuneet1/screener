@@ -63,6 +63,10 @@ export function startFileLogging(): string | null {
   return logPath;
 }
 
+/** A launcher that exits faster than this handed off to an existing browser process
+ *  rather than being closed by the user. */
+const HANDOFF_EXIT_MS = 3000;
+
 /** Standard install locations for Chromium-based browsers on Windows. Any of these can
  *  host an "app window": a standalone window with no address bar, no tabs and its own
  *  taskbar entry, which is what makes this feel like a desktop app rather than a webpage. */
@@ -123,17 +127,43 @@ export function openAppWindow(url: string, onClosed?: () => void): void {
     );
     child.on("error", (err) => {
       console.error(`[screener] Could not open app window (${err.message}); falling back.`);
-      openInDefaultBrowser(url);
+      openInDefaultBrowser(url, onClosed);
     });
-    if (onClosed) child.on("exit", onClosed);
+
+    if (onClosed) {
+      const launchedAt = Date.now();
+      child.on("exit", () => {
+        // Chromium's ProcessSingleton makes the launcher hand off to an already-running
+        // instance for this profile and exit immediately. That is not the user closing
+        // the window, and treating it as such would kill the server we just started.
+        const ranFor = Date.now() - launchedAt;
+        if (ranFor < HANDOFF_EXIT_MS) {
+          console.log(
+            `[screener] App-window launcher exited after ${ranFor}ms (handed off to an ` +
+              `existing window); leaving the server running.`,
+          );
+          return;
+        }
+        onClosed();
+      });
+    }
     return;
   }
 
   console.error("[screener] No Chromium-based browser found for an app window; using default browser.");
-  openInDefaultBrowser(url);
+  openInDefaultBrowser(url, onClosed);
 }
 
-function openInDefaultBrowser(url: string): void {
+/** Opens `url` in the default browser. The opener process exits immediately and the
+ *  page's lifetime is not observable, so `onClosed` can never fire here — the caller is
+ *  told so once, rather than silently never being able to quit. */
+function openInDefaultBrowser(url: string, onClosed?: () => void): void {
+  if (onClosed) {
+    console.log(
+      `[screener] Opened in your default browser; closing that tab will not stop the ` +
+        `screener. Stop it from the terminal, or quit the process.`,
+    );
+  }
   const cmd =
     process.platform === "win32"
       ? { file: "cmd", args: ["/c", "start", "", url] }
